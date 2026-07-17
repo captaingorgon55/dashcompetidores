@@ -35,6 +35,7 @@ from backend.config import (
     META_ACCESS_TOKEN, USER_AGENTS, PROXY_URL,
     MIN_DELAY_BETWEEN_REQUESTS, MAX_RETRIES,
 )
+import os
 
 
 logging.basicConfig(
@@ -49,32 +50,37 @@ logger = logging.getLogger(__name__)
 async def run_warmup_checks():
     """
     Verifica al inicio que los componentes críticos funcionen.
-    Sin esto, los errores pasan desapercibidos (se loguean a DEBUG).
     """
     checks = []
 
-    # 1. Playwright: verificar que se pueda lanzar (OPCIONAL en servidores 512MB)
-    try:
-        from backend.scrapers.playwright_manager import playwright_manager
-        ctx = await playwright_manager.get_context("_warmup_check")
-        page = await ctx.new_page()
+    # 1. Playwright: lanzar Chromium y verificar
+    from backend.scrapers.threads import PLAYWRIGHT_AVAILABLE
+    if PLAYWRIGHT_AVAILABLE:
         try:
-            await page.goto("about:blank", timeout=10000)
-            checks.append(("✅ Playwright (Chromity)", True, "Browser-based scraping disponible"))
-        finally:
-            await page.close()
-            await playwright_manager.close_context("_warmup_check")
-    except (ImportError, Exception) as e:
-        checks.append(("ℹ️ Playwright", False,
-                       "Sin Chromium en Python (~300MB ahorrados). "
-                       "llm-scraper (Node.js) maneja el navegador."))
+            from backend.scrapers.playwright_manager import playwright_manager
+            ctx = await playwright_manager.get_context("_warmup")
+            page = await ctx.new_page()
+            try:
+                await page.goto("https://www.threads.com/@elespectador", wait_until="domcontentloaded", timeout=15000)
+                title = await page.title()
+                html = await page.content()
+                has_data = "follower_count" in html or "Espectador" in title
+                checks.append(("✅ Playwright", True,
+                               f"Chromium OK — {title[:60]}" if has_data else
+                               "Chromium OK — página cargada"))
+            finally:
+                await page.close()
+                await playwright_manager.close_context("_warmup")
+        except Exception as e:
+            checks.append(("❌ Playwright", False, f"Chromium no disponible: {str(e)[:80]}"))
+    else:
+        checks.append(("❌ Playwright", False, "Módulo no instalado"))
 
-    # 2. Node.js + llm-scraper
+    # 2. Node.js + llm-scraper (opcional)
     import shutil
+    import os
     node_path = shutil.which("node")
     if node_path:
-        checks.append(("✅ Node.js", True, node_path))
-        import os
         from backend.config import LLM_PROVIDER
         from backend.scrapers.llm_scraper_bridge import PROVIDER_KEY_ENV
         required_envs = PROVIDER_KEY_ENV.get(LLM_PROVIDER, [])
@@ -82,45 +88,28 @@ async def run_warmup_checks():
         if has_key:
             checks.append(("✅ LLM Scraper", True, f"Provider: {LLM_PROVIDER}"))
         else:
-            checks.append(("⚠️ LLM Scraper", False,
-                           f"Falta clave API. Proveedor: {LLM_PROVIDER}. "
-                           f"Variables: {', '.join(required_envs)}. "
-                           f"Regístrate gratis en console.groq.com"))
-    else:
-        checks.append(("❌ Node.js", False, "No encontrado en PATH"))
+            checks.append(("ℹ️ LLM Scraper", True,
+                           f"Sin API key. Si quieres: console.groq.com (gratis)"))
 
-    # 3. httpx (verificar acceso a threads.com)
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get("https://www.threads.com/@elespectador")
-            if resp.status_code == 200:
-                checks.append(("✅ threads.com", True, "Responde 200 OK (httpx)"))
-                # Detectar si es login page
-                if "/login" in resp.text[:500]:
-                    checks.append(("⚠️ threads.com", True,
-                                   "Devuelve página login a httpx. Necesita Playwright."))
-            else:
-                checks.append(("⚠️ threads.com", False, f"Status: {resp.status_code}"))
-    except Exception as e:
-        checks.append(("❌ threads.com", False, str(e)[:60]))
-
-    # 4. Meta API
+    # 3. Meta API (opcional)
     from backend.config import META_ACCESS_TOKEN
     if META_ACCESS_TOKEN:
         checks.append(("✅ Meta API", True, "Token configurado"))
     else:
-        checks.append(("ℹ️ Meta API", False, "Sin token. Usa Meta App Review."))
+        checks.append(("ℹ️ Meta API", True, "Sin token. Opcional."))
 
+    # 4. Resumen
     logger.info("=" * 60)
-    logger.info("🏁 WARMUP CHECKS — Estado del sistema")
+    logger.info("🏁 WARMUP CHECKS")
     logger.info("=" * 60)
     for name, ok, detail in checks:
-        if ok:
-            logger.info(f"  {name} — {detail}")
-        else:
-            logger.warning(f"  {name} — {detail}")
+        icon = "✅" if ok else "❌"
+        logger.info(f"  {icon} {name} — {detail}")
     logger.info("=" * 60)
+
+    # Log explícito del estado del scraper
+    logger.info(f"📊 Scraper: Playwright={'SÍ' if PLAYWRIGHT_AVAILABLE else 'NO'} | "
+                f"Meta API={'SÍ' if META_ACCESS_TOKEN else 'NO'}")
 
     return checks
 
@@ -890,56 +879,37 @@ async def dashboard_summary(db: AsyncSession = Depends(get_session)):
 @app.get("/api/threads/scraper-status")
 async def scraper_status():
     """
-    Muestra qué estrategias de scraping están disponibles y su orden de prioridad.
+    Muestra qué estrategias de scraping están disponibles.
     """
+    from backend.scrapers.threads import PLAYWRIGHT_AVAILABLE
     return {
-        "version": "ThreadsScraperPremium v3.0",
+        "version": "ThreadsScraperPremium v4.0 (simplificado)",
         "strategies": [
             {
                 "name": "1. Meta Graph API (Oficial)",
                 "available": bool(META_ACCESS_TOKEN),
-                "description": "API oficial de Meta, requiere app aprobada con threads_profile_discovery",
-                "endpoints": ["GET /profile_lookup", "GET /profile_posts"],
-                "rate_limit": "1,000 req/24h",
+                "description": "API oficial de Meta, requiere app aprobada y META_ACCESS_TOKEN",
             },
             {
-                "name": "2. Playwright Headless (Recomendado)",
-                "available": True,
-                "description": "Navegador real que ejecuta JS, captura GraphQL via network intercept + hidden JSON",
+                "name": "2. Playwright Headless (PRINCIPAL)",
+                "available": PLAYWRIGHT_AVAILABLE,
+                "description": "Navegador real que ejecuta JS, extrae hidden JSON + texto visible",
                 "features": [
-                    "Network interception (GraphQL en vivo)",
                     "Hidden JSON (<script data-sjs>)",
-                    "Anti-detection (webdriver spoof, UA rotación)",
+                    "Anti-detection (webdriver spoof)",
                     "Auto-scroll para carga de posts",
                 ],
             },
             {
-                "name": "3. oEmbed API (Tokenless)",
-                "available": True,
-                "description": "API pública sin autenticación, solo datos básicos embed",
-                "endpoints": ["GET /api/oembed"],
-            },
-            {
-                "name": "4. GraphQL Directo (httpx)",
-                "available": True,
-                "description": "Peticiones directas al endpoint GraphQL con Doc IDs conocidos",
-                "features": [
-                    "Rotación de User-Agents",
-                    "Exponential backoff + jitter",
-                    f"Múltiples Doc IDs de fallback ({len(ThreadsScraperPremium.PROFILE_DOC_IDS)})",
-                ],
-            },
-            {
-                "name": "5. Static HTML Fallback",
-                "available": True,
-                "description": "Extracción de HTML estático con BeautifulSoup + meta tags + JSON-LD",
+                "name": "3. LLM Scraper (Fallback IA)",
+                "available": any(os.environ.get(k) for k in ["GROQ_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY"]),
+                "description": "Node.js + LLM (Groq/OpenAI). Requiere API key.",
             },
         ],
+        "note": "threads.com bloquea httpx. Solo Playwright o Meta API funcionan.",
         "config": {
-            "user_agents": len(USER_AGENTS),
-            "min_delay": MIN_DELAY_BETWEEN_REQUESTS,
-            "max_retries": MAX_RETRIES,
-            "proxy_configured": bool(PROXY_URL),
+            "playwright_available": PLAYWRIGHT_AVAILABLE,
+            "meta_token_configured": bool(META_ACCESS_TOKEN),
         },
     }
 

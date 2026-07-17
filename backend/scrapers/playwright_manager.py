@@ -1,25 +1,37 @@
 """
 Playwright Browser Manager — Gestión eficiente del navegador headless.
 
-Mantiene una única instancia de navegador reutilizable con contextos
-aislados por perfil. Reduce la sobrecarga de lanzar Chromium cada vez.
-
-Estrategias:
-- Single browser instance, multiple contexts
-- Context isolation per profile/user-agent
-- Automatic cleanup on timeout
-- Graceful shutdown
+Soporta LD_LIBRARY_PATH automático (para servidores sin las librerías del
+sistema instaladas globalmente). Configura la variable de entorno desde
+~/.local/lib/chromium-deps/ si no está ya configurada.
 """
 
 import asyncio
 import logging
-import random
+import os
 from typing import Optional
+
+# ─── LD_LIBRARY_PATH automático ───────────────────────────────
+# En servidores sin sudo, las dependencias de Chromium se extraen
+# a ~/.local/lib/chromium-deps/extracted/merged/
+# Si LD_LIBRARY_PATH no está configurado pero las librerías existen,
+# lo configuramos automáticamente.
+_LD_LIBRARY_PATH_CONFIGURED = False
+_CHROMIUM_DEPS = os.path.expanduser("~/.local/lib/chromium-deps/extracted/merged")
+
+if not os.environ.get("LD_LIBRARY_PATH", ""):
+    # Verificar si las librerías extraídas manualmente existen
+    libnspr4 = os.path.join(_CHROMIUM_DEPS, "libnspr4.so")
+    libnss3 = os.path.join(_CHROMIUM_DEPS, "libnss3.so")
+    libasound = os.path.join(_CHROMIUM_DEPS, "libasound.so.2")
+    if os.path.isfile(libnspr4) and os.path.isfile(libnss3) and os.path.isfile(libasound):
+        os.environ["LD_LIBRARY_PATH"] = _CHROMIUM_DEPS
+        _LD_LIBRARY_PATH_CONFIGURED = True
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
 
 from backend.config import (
-    PLAYWRIGHT_HEADLESS, PLAYWRIGHT_TIMEOUT_MS,
+    PLAYWRIGHT_HEADLESS,
     USER_AGENTS, PROXY_URL,
 )
 
@@ -30,13 +42,8 @@ class PlaywrightManager:
     """
     Singleton que gestiona el ciclo de vida del navegador Playwright.
 
-    Uso:
-        manager = PlaywrightManager()
-        context = await manager.get_context()
-        page = await context.new_page()
-        await page.goto("https://threads.net")
-        ...
-        await manager.close()
+    Auto-configura LD_LIBRARY_PATH si las librerías están en
+    ~/.local/lib/chromium-deps/ (instalación manual sin sudo).
     """
 
     _instance: Optional["PlaywrightManager"] = None
@@ -55,6 +62,9 @@ class PlaywrightManager:
         async with self._lock:
             if self._browser is not None:
                 return
+
+            if _LD_LIBRARY_PATH_CONFIGURED:
+                logger.info(f"🔧 LD_LIBRARY_PATH configurado: {_CHROMIUM_DEPS}")
 
             logger.info("🚀 Lanzando Chromium headless via Playwright...")
             self._playwright = await async_playwright().start()

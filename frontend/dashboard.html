@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="es-CO">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard — Competitor Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body data-page="dashboard">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon espectador">📊</div>
+            <div class="sidebar-brand-text">
+                <h2>Competitor Monitor</h2>
+                <small>El Espectador · VEA</small>
+            </div>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="/" class="nav-item active">
+                <span class="nav-icon">📊</span>
+                <span>Dashboard</span>
+            </a>
+            <a href="/competitors" class="nav-item">
+                <span class="nav-icon">🏆</span>
+                <span>Competidores</span>
+                <span class="nav-badge">5</span>
+            </a>
+            <a href="/threads" class="nav-item">
+                <span class="nav-icon">📱</span>
+                <span>Threads</span>
+            </a>
+            <hr class="nav-divider">
+            <a href="/discover" class="nav-item">
+                <span class="nav-icon">🔍</span>
+                <span>Google Discover</span>
+            </a>
+            <a href="/search" class="nav-item">
+                <span class="nav-icon">🌐</span>
+                <span>Search Traffic</span>
+            </a>
+            <hr class="nav-divider">
+            <hr class="nav-divider">
+            <a href="/analysis" class="nav-item">
+                <span class="nav-icon">🧠</span>
+                <span>Análisis Estratégico</span>
+                <span class="nav-badge">IA</span>
+            </a>
+            <hr class="nav-divider">
+            <a href="/manual-entry" class="nav-item">
+                <span class="nav-icon">✏️</span>
+                <span>Entrada Manual</span>
+            </a>
+        </nav>
+        <div class="sidebar-footer">
+            v2.0.0 · Julio 2026
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="page-header">
+            <h1>📊 Dashboard de Competidores</h1>
+            <p>Monitoreo en vivo de Threads, Google Discover, Search & tráfico web</p>
+            <div class="last-updated" id="last-updated">Cargando...</div>
+        </div>
+
+        <!-- KPI Grid -->
+        <div class="kpi-grid" id="kpi-grid">
+            <div class="loading"><div class="spinner"></div><span>Cargando KPIs...</span></div>
+        </div>
+
+        <!-- Charts row -->
+        <div class="cards-grid">
+            <div class="card">
+                <div class="card-header">
+                    <h3>📱 Seguidores en Threads</h3>
+                </div>
+                <div class="card-body">
+                    <div class="chart-wrapper" style="min-height: 350px;">
+                        <canvas id="chart-threads-followers"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <h3>📊 Comparativa General</h3>
+                </div>
+                <div class="card-body">
+                    <div class="chart-wrapper" style="min-height: 350px;">
+                        <canvas id="chart-threads-comparison"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Competitor Table -->
+        <div class="card">
+            <div class="card-header">
+                <h3>🏆 Tabla Comparativa de Competidores</h3>
+                <button class="btn btn-primary btn-sm" onclick="location.reload()">🔄 Actualizar</button>
+            </div>
+            <div class="card-body" style="overflow-x: auto;">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Medio</th>
+                            <th>Seguidores Threads</th>
+                            <th>Crecimiento</th>
+                            <th>Engagement</th>
+                            <th>Sesiones/Sem</th>
+                            <th>Discover/Sem</th>
+                            <th>Última actualización</th>
+                        </tr>
+                    </thead>
+                    <tbody id="competitor-table-body">
+                        <tr><td colspan="7" class="text-center text-muted">Cargando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <div id="toast-container" class="toast-container"></div>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

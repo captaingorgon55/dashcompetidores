@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es-CO">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análisis Estratégico — Competitor Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .insight-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius); padding: 1.25rem; margin-bottom: 1rem; transition: var(--transition); }
+        .insight-card:hover { background: var(--bg-card-hover); transform: translateY(-2px); box-shadow: var(--shadow); }
+        .insight-tag { font-size: 0.65rem; padding: 0.2rem 0.5rem; border-radius: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; display: inline-block; margin-right: 0.5rem; }
+        .tag-us { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); }
+        .tag-competitor { background: rgba(100, 116, 139, 0.15); color: var(--text-muted); }
+        .tag-high { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+        .tag-medium { background: rgba(234, 179, 8, 0.15); color: var(--accent-yellow); }
+        .tag-low { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); }
+        .strategy-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius); padding: 1.5rem; margin-bottom: 1.25rem; transition: var(--transition); }
+        .strategy-card:hover { background: var(--bg-card-hover); box-shadow: var(--shadow-lg); }
+        .strategy-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary); }
+        .strategy-desc { font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem; }
+        .strategy-action { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color); font-size: 0.9rem; }
+        .strategy-action:last-child { border-bottom: none; }
+        .priority-badge { font-size: 0.65rem; padding: 0.15rem 0.5rem; border-radius: 10px; font-weight: 600; text-transform: uppercase; }
+        .priority-alta { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+        .priority-media { background: rgba(234, 179, 8, 0.15); color: var(--accent-yellow); }
+        .priority-baja { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); }
+        .weekly-action { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: rgba(59, 130, 246, 0.05); border-radius: var(--border-radius-sm); margin-bottom: 0.5rem; font-size: 0.9rem; }
+        .weekly-action input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent-blue); cursor: pointer; }
+        .market-kpi { text-align: center; padding: 1.5rem; }
+        .market-kpi-value { font-size: 2.2rem; font-weight: 700; color: var(--text-primary); }
+        .market-kpi-label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.25rem; }
+        .risk-card { border-left: 3px solid var(--accent-red); }
+        .opportunity-card { border-left: 3px solid var(--accent-green); }
+        .insight-text { display: flex; align-items: flex-start; gap: 0.5rem; }
+    </style>
+</head>
+<body data-page="analysis">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon espectador">🧠</div>
+            <div class="sidebar-brand-text">
+                <h2>Competitor Monitor</h2>
+                <small>El Espectador · VEA</small>
+            </div>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+            <a href="/competitors" class="nav-item"><span class="nav-icon">🏆</span><span>Competidores</span></a>
+            <a href="/threads" class="nav-item"><span class="nav-icon">📱</span><span>Threads</span></a>
+            <hr class="nav-divider">
+            <a href="/discover" class="nav-item"><span class="nav-icon">🔍</span><span>Google Discover</span></a>
+            <a href="/search" class="nav-item"><span class="nav-icon">🌐</span><span>Search Traffic</span></a>
+            <hr class="nav-divider">
+            <a href="/analysis" class="nav-item active"><span class="nav-icon">🧠</span><span>Análisis Estratégico</span><span class="nav-badge" id="nav-analysis-badge">¡NUEVO!</span></a>
+            <hr class="nav-divider">
+            <a href="/manual-entry" class="nav-item"><span class="nav-icon">✏️</span><span>Entrada Manual</span></a>
+        </nav>
+        <div class="sidebar-footer">v2.0.0 · Julio 2026</div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="page-header">
+            <h1>🧠 Análisis Estratégico con IA</h1>
+            <p>Insights inteligentes, estrategias de contenido y acciones semanales generadas a partir de datos reales</p>
+            <div class="last-updated" id="last-updated-analysis">Generando análisis...</div>
+        </div>
+
+        <!-- Market Overview KPIs -->
+        <div class="kpi-grid" id="market-kpis">
+            <div class="loading"><div class="spinner"></div><span>Analizando mercado...</span></div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" data-tab="strategies">📋 Estrategias</button>
+            <button class="tab" data-tab="insights">💡 Insights</button>
+            <button class="tab" data-tab="actions">✅ Acciones Semanales</button>
+            <button class="tab" data-tab="competitors">👥 Por Competidor</button>
+        </div>
+
+        <!-- Tab: Strategies -->
+        <div id="tab-strategies" class="tab-content active-content">
+            <div id="strategies-container">
+                <div class="loading"><div class="spinner"></div><span>Cargando estrategias...</span></div>
+            </div>
+        </div>
+
+        <!-- Tab: Insights -->
+        <div id="tab-insights" class="tab-content" style="display:none;">
+            <div class="cards-grid" id="insights-container">
+                <div class="loading"><div class="spinner"></div><span>Cargando insights...</span></div>
+            </div>
+        </div>
+
+        <!-- Tab: Weekly Actions -->
+        <div id="tab-actions" class="tab-content" style="display:none;">
+            <div id="weekly-actions-container">
+                <div class="loading"><div class="spinner"></div><span>Cargando acciones...</span></div>
+            </div>
+        </div>
+
+        <!-- Tab: By Competitor -->
+        <div id="tab-competitors" class="tab-content" style="display:none;">
+            <div id="competitors-analysis-container">
+                <div class="loading"><div class="spinner"></div><span>Cargando análisis por competidor...</span></div>
+            </div>
+        </div>
+    </main>
+
+    <div id="toast-container" class="toast-container"></div>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

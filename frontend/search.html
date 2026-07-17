@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es-CO">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Traffic — Competitor Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body data-page="search">
+
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon espectador">📊</div>
+            <div class="sidebar-brand-text">
+                <h2>Competitor Monitor</h2>
+                <small>El Espectador · VEA</small>
+            </div>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+            <a href="/competitors" class="nav-item"><span class="nav-icon">🏆</span><span>Competidores</span></a>
+            <a href="/threads" class="nav-item"><span class="nav-icon">📱</span><span>Threads</span></a>
+            <hr class="nav-divider">
+            <a href="/discover" class="nav-item"><span class="nav-icon">🔍</span><span>Google Discover</span></a>
+            <a href="/search" class="nav-item active"><span class="nav-icon">🌐</span><span>Search Traffic</span></a>
+            <hr class="nav-divider">
+            <hr class="nav-divider">
+            <a href="/analysis" class="nav-item"><span class="nav-icon">🧠</span><span>Análisis Estratégico</span><span class="nav-badge">IA</span></a>
+            <hr class="nav-divider">
+            <a href="/manual-entry" class="nav-item"><span class="nav-icon">✏️</span><span>Entrada Manual</span></a>
+        </nav>
+        <div class="sidebar-footer">v2.0.0 · Julio 2026</div>
+    </aside>
+
+    <main class="main-content">
+        <div class="page-header">
+            <h1>🌐 Search Traffic</h1>
+            <p>Rendimiento en Google Search y Bing — Clics, impresiones y posiciones</p>
+        </div>
+
+        <!-- KPI Stats -->
+        <div class="kpi-grid" id="search-stats">
+            <div class="loading"><div class="spinner"></div><span>Cargando...</span></div>
+        </div>
+
+        <!-- Chart -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h3>📈 Clics vs Impresiones (30 días)</h3>
+            </div>
+            <div class="card-body">
+                <div class="chart-wrapper" style="min-height: 350px;" id="search-chart">
+                    <div class="loading"><div class="spinner"></div><span>Cargando datos de Search Console...</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="alert alert-info">
+            💡 <strong>Nota:</strong> Estos datos provienen de Google Search Console y Google Analytics 4.
+            Para activar la integración, configura las credenciales OAuth 2.0 de Google en las variables de entorno.
+        </div>
+    </main>
+
+    <div id="toast-container" class="toast-container"></div>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

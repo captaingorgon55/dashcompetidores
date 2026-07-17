@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="es-CO">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrada Manual — Competitor Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✏️</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body data-page="manual-entry">
+
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon espectador">📊</div>
+            <div class="sidebar-brand-text">
+                <h2>Competitor Monitor</h2>
+                <small>El Espectador · VEA</small>
+            </div>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+            <a href="/competitors" class="nav-item"><span class="nav-icon">🏆</span><span>Competidores</span></a>
+            <a href="/threads" class="nav-item"><span class="nav-icon">📱</span><span>Threads</span></a>
+            <hr class="nav-divider">
+            <a href="/discover" class="nav-item"><span class="nav-icon">🔍</span><span>Google Discover</span></a>
+            <a href="/search" class="nav-item"><span class="nav-icon">🌐</span><span>Search Traffic</span></a>
+            <hr class="nav-divider">
+            <a href="/analysis" class="nav-item"><span class="nav-icon">🧠</span><span>Análisis Estratégico</span><span class="nav-badge">IA</span></a>
+            <hr class="nav-divider">
+            <a href="/manual-entry" class="nav-item active"><span class="nav-icon">✏️</span><span>Entrada Manual</span></a>
+        </nav>
+        <div class="sidebar-footer">v2.0.0 · Julio 2026</div>
+    </aside>
+
+    <main class="main-content">
+        <div class="page-header">
+            <h1>✏️ Entrada Manual de Datos</h1>
+            <p>Registra métricas que no podemos automatizar: datos de Apple News, MSN News, Flipboard, notas internas</p>
+        </div>
+
+        <div class="cards-grid">
+            <!-- Form -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>📝 Nuevo Registro</h3>
+                </div>
+                <div class="card-body">
+                    <form id="manual-entry-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label" for="entry-competitor">Medio</label>
+                                <select class="form-select" id="entry-competitor" required></select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="entry-category">Categoría</label>
+                                <select class="form-select" id="entry-category" required>
+                                    <option value="threads">Threads</option>
+                                    <option value="discover">Google Discover</option>
+                                    <option value="search">Search Traffic</option>
+                                    <option value="traffic">Tráfico Web</option>
+                                    <option value="apple_news">Apple News</option>
+                                    <option value="flipboard">Flipboard</option>
+                                    <option value="msn_news">MSN News</option>
+                                    <option value="notes">Notas Internas</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label" for="entry-metric">Nombre de la Métrica</label>
+                                <input class="form-input" id="entry-metric" placeholder="Ej: Seguidores Apple News" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="entry-value">Valor (numérico)</label>
+                                <input class="form-input" id="entry-value" type="number" step="any" placeholder="Ej: 15000">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label" for="entry-date">Fecha</label>
+                                <input class="form-input" id="entry-date" type="date" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="entry-text">Valor (texto)</label>
+                                <input class="form-input" id="entry-text" placeholder="Si no es numérico, ej: 'Lanzó sección nueva'">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="entry-notes">Notas</label>
+                            <textarea class="form-input form-textarea" id="entry-notes" placeholder="Contexto adicional..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-success">💾 Guardar Registro</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Recent Entries -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>📋 Registros Recientes</h3>
+                    <div style="display:flex;gap:0.5rem;">
+                        <select class="form-select" id="filter-competitor" style="width:auto;">
+                            <option value="">Todos</option>
+                        </select>
+                        <select class="form-select" id="filter-category" style="width:auto;">
+                            <option value="">Todas</option>
+                            <option value="threads">Threads</option>
+                            <option value="discover">Discover</option>
+                            <option value="search">Search</option>
+                            <option value="traffic">Tráfico</option>
+                            <option value="apple_news">Apple News</option>
+                            <option value="flipboard">Flipboard</option>
+                            <option value="msn_news">MSN News</option>
+                            <option value="notes">Notas</option>
+                        </select>
+                        <button class="btn btn-secondary btn-sm" id="filter-btn">Filtrar</button>
+                    </div>
+                </div>
+                <div class="card-body" style="overflow-x:auto;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Medio</th>
+                                <th>Categoría</th>
+                                <th>Métrica</th>
+                                <th>Valor</th>
+                                <th>Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody id="manual-entries-table">
+                            <tr><td colspan="5" class="text-center text-muted">Cargando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="alert alert-info">
+            💡 <strong>Tip:</strong> Usa la entrada manual para registrar datos de plataformas que no tienen API pública:
+            <strong>Apple News</strong>, <strong>Flipboard</strong>, <strong>MSN News</strong>, o cualquier métrica cualitativa.
+        </div>
+    </main>
+
+    <div id="toast-container" class="toast-container"></div>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

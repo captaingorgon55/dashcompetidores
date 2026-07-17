@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es-CO">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Discover — Competitor Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body data-page="discover">
+
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon espectador">📊</div>
+            <div class="sidebar-brand-text">
+                <h2>Competitor Monitor</h2>
+                <small>El Espectador · VEA</small>
+            </div>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="/" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+            <a href="/competitors" class="nav-item"><span class="nav-icon">🏆</span><span>Competidores</span></a>
+            <a href="/threads" class="nav-item"><span class="nav-icon">📱</span><span>Threads</span></a>
+            <hr class="nav-divider">
+            <a href="/discover" class="nav-item active"><span class="nav-icon">🔍</span><span>Google Discover</span></a>
+            <a href="/search" class="nav-item"><span class="nav-icon">🌐</span><span>Search Traffic</span></a>
+            <hr class="nav-divider">
+            <hr class="nav-divider">
+            <a href="/analysis" class="nav-item"><span class="nav-icon">🧠</span><span>Análisis Estratégico</span><span class="nav-badge">IA</span></a>
+            <hr class="nav-divider">
+            <a href="/manual-entry" class="nav-item"><span class="nav-icon">✏️</span><span>Entrada Manual</span></a>
+        </nav>
+        <div class="sidebar-footer">v2.0.0 · Julio 2026</div>
+    </aside>
+
+    <main class="main-content">
+        <div class="page-header">
+            <h1>🔍 Google Discover</h1>
+            <p>Rendimiento en el feed algorítmico de Google Discover</p>
+        </div>
+
+        <!-- KPI Stats -->
+        <div class="kpi-grid" id="discover-stats">
+            <div class="loading"><div class="spinner"></div><span>Cargando...</span></div>
+        </div>
+
+        <!-- Chart -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h3>📈 Impresiones vs Clics (30 días)</h3>
+            </div>
+            <div class="card-body">
+                <div class="chart-wrapper" style="min-height: 350px;" id="discover-chart">
+                    <div class="loading"><div class="spinner"></div><span>Cargando datos de Discover...</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Table -->
+        <div class="card">
+            <div class="card-header">
+                <h3>📋 Resumen Discover por Medio</h3>
+            </div>
+            <div class="card-body">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Medio</th>
+                            <th>Impresiones (7d)</th>
+                            <th>Clics (7d)</th>
+                            <th>CTR</th>
+                        </tr>
+                    </thead>
+                    <tbody id="discover-table-body">
+                        <tr><td colspan="4" class="text-center text-muted">Cargando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="alert alert-info mt-3">
+            💡 <strong>Nota:</strong> Los datos de Discover provienen de Google Search Console. 
+            Conecta tu cuenta de Google configurando las variables de entorno <code>GOOGLE_CLIENT_ID</code> y <code>GOOGLE_CLIENT_SECRET</code>.
+        </div>
+    </main>
+
+    <div id="toast-container" class="toast-container"></div>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

@@ -34,6 +34,7 @@ SITE_URL = os.getenv("SITE_URL", "sc-domain:elespectador.com")  # e.g. "sc-domai
 
 # ─── Default Competitors ─────────────────────────────────────────
 DEFAULT_COMPETITORS = {
+    # ─── NOSOTROS ──────────────────────────────────────────────
     "elespectador": {
         "name": "El Espectador",
         "threads_handle": "@elespectador",
@@ -50,28 +51,80 @@ DEFAULT_COMPETITORS = {
         "color": "#E91E63",
         "is_us": True,
     },
+
+    # ─── REFERENTES / COMPETIDORES DIRECTOS ────────────────────
+    "elpais": {
+        "name": "El País (España)",
+        "threads_handle": "@el_pais",
+        "threads_url": "https://www.threads.com/@el_pais",
+        "site_url": "https://elpais.com",
+        "color": "#E53935",
+        "is_us": False,
+    },
+    "infobae": {
+        "name": "Infobae",
+        "threads_handle": "@infobae",
+        "threads_url": "https://www.threads.com/@infobae",
+        "site_url": "https://www.infobae.com",
+        "color": "#1E88E5",
+        "is_us": False,
+    },
+    "lanacioncom": {
+        "name": "La Nación (Argentina)",
+        "threads_handle": "@lanacioncom",
+        "threads_url": "https://www.threads.com/@lanacioncom",
+        "site_url": "https://www.lanacion.com.ar",
+        "color": "#00796B",
+        "is_us": False,
+    },
+    "eltiempo": {
+        "name": "El Tiempo (Colombia)",
+        "threads_handle": "@eltiempo",
+        "threads_url": "https://www.threads.com/@eltiempo",
+        "site_url": "https://www.eltiempo.com",
+        "color": "#FDD835",
+        "is_us": False,
+    },
+    "lavanguardia": {
+        "name": "La Vanguardia",
+        "threads_handle": "@lavanguardia",
+        "threads_url": "https://www.threads.com/@lavanguardia",
+        "site_url": "https://www.lavanguardia.com",
+        "color": "#8E24AA",
+        "is_us": False,
+    },
+    "clarincom": {
+        "name": "Clarín",
+        "threads_handle": "@clarincom",
+        "threads_url": "https://www.threads.com/@clarincom",
+        "site_url": "https://www.clarin.com",
+        "color": "#D32F2F",
+        "is_us": False,
+    },
+
+    # ─── OTROS COMPETIDORES REGIONALES ─────────────────────────
+    "eluniversalmx": {
+        "name": "El Universal (México)",
+        "threads_handle": "@eluniversalmx",
+        "threads_url": "https://www.threads.com/@eluniversalmx",
+        "site_url": "https://www.eluniversal.com.mx",
+        "color": "#F57C00",
+        "is_us": False,
+    },
+    "milenio": {
+        "name": "Milenio (México)",
+        "threads_handle": "@milenio",
+        "threads_url": "https://www.threads.com/@milenio",
+        "site_url": "https://www.milenio.com",
+        "color": "#C62828",
+        "is_us": False,
+    },
     "globo_g1": {
         "name": "G1 (Globo)",
         "threads_handle": "@g1",
         "threads_url": "https://www.threads.com/@g1",
         "site_url": "https://g1.globo.com",
         "color": "#FF6F00",
-        "is_us": False,
-    },
-    "lanacion": {
-        "name": "La Nación",
-        "threads_handle": "@lanacion",
-        "threads_url": "https://www.threads.com/@lanacion",
-        "site_url": "https://www.lanacion.com.ar",
-        "color": "#00796B",
-        "is_us": False,
-    },
-    "clarin": {
-        "name": "Clarín",
-        "threads_handle": "@clarin",
-        "threads_url": "https://www.threads.com/@clarin",
-        "site_url": "https://www.clarin.com",
-        "color": "#D32F2F",
         "is_us": False,
     },
 }
@@ -105,3 +158,10 @@ PROXY_URL = os.getenv("PROXY_URL", "")
 META_APP_ID = os.getenv("META_APP_ID", "")
 META_APP_SECRET = os.getenv("META_APP_SECRET", "")
 META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
+
+# LLM Scraper (llm-scraper Node.js)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")  # groq, openai, openai_large
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_SCRAPER_TIMEOUT = int(os.getenv("LLM_SCRAPER_TIMEOUT", "60"))  # segundos
+# Groq tiene free tier, no necesita API key para empezar
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")

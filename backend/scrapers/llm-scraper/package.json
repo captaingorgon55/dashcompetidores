@@ -1,0 +1,19 @@
+{
+  "name": "threads-llm-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "LLM-powered scraper for Threads using llm-scraper library",
+  "main": "threads-scraper.mjs",
+  "scripts": {
+    "scrape": "node threads-scraper.mjs",
+    "generate": "node generate-code.mjs"
+  },
+  "dependencies": {
+    "llm-scraper": "^2.0.0",
+    "playwright": "^1.61.0",
+    "zod": "^3.23.0",
+    "zod-to-json-schema": "^3.23.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "ai": "^4.0.0"
+  }
+}

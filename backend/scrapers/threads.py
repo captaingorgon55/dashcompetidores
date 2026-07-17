@@ -5,22 +5,26 @@ Arquitectura de estrategias (fallback chain):
 
   ┌─ 1. Meta Graph API (Opcional — requiere App aprobada)
   │     GET /{api-version}/{user-id}/profile_lookup?username={username}
-  │     GET /{api-version}/{user-id}/profile_posts?username={username}
   │
-  ├─ 2. Playwright Headless (Principal)
+  ├─ 2. LLM Scraper (Nuevo!)
+  │     Node.js + Playwright + LLM (Groq/OpenAI/Gemini)
+  │     Extracción inteligente: HTML o screenshot (multimodal)
+  │     ✅ Gratis via Groq (Llama 3.3 70B)
+  │
+  ├─ 3. Playwright Headless
   │     ├─ Network Interception → captura respuestas GraphQL en vivo
   │     ├─ Hidden JSON → extrae <script type="application/json" data-sjs>
-  │     └─ Auto-scroll → carga posts adicionales
+  │     └─ Anti-detección avanzada
   │
-  ├─ 3. oEmbed API
-  │     GET https://threads.net/api/oembed?url=...
-  │     → datos básicos embed
+  ├─ 4. oEmbed API
+  │     GET https://threads.com/api/oembed?url=...
+  │     → datos embed via Playwright
   │
-  ├─ 4. httpx GraphQL Directo
-  │     POST https://www.threads.net/api/graphql
-  │     → doc_ids, rotating UAs
+  ├─ 5. httpx GraphQL Directo
+  │     POST https://www.threads.com/api/graphql
+  │     → doc_ids, rotating UAs, backoff
   │
-  └─ 5. Static HTML (Último recurso)
+  └─ 6. Static HTML (Último recurso)
         BeautifulSoup + meta tags + JSON-LD
 
 Mejoras v3:
@@ -49,9 +53,10 @@ from bs4 import BeautifulSoup
 from backend.config import (
     USER_AGENTS, MIN_DELAY_BETWEEN_REQUESTS, MAX_DELAY_BETWEEN_REQUESTS,
     MAX_RETRIES, META_APP_ID, META_ACCESS_TOKEN, PROXY_URL,
-    PLAYWRIGHT_TIMEOUT_MS,
+    PLAYWRIGHT_TIMEOUT_MS, LLM_PROVIDER, LLM_API_KEY, LLM_SCRAPER_TIMEOUT,
 )
 from backend.scrapers.playwright_manager import playwright_manager
+from backend.scrapers.llm_scraper_bridge import llm_scrape_profile, llm_scrape_posts
 
 logger = logging.getLogger(__name__)
 
@@ -254,9 +259,6 @@ class ThreadsScraperPremium:
         clean_handle = handle.lstrip("@")
         logger.info(f"🔍 Scrapeando perfil @{clean_handle}...")
 
-        # Flag: si Playwright detectó login wall, saltar estrategias httpx
-        login_detected = False
-
         # ─── Estrategia 1: Meta Graph API ─────────────────────
         if META_ACCESS_TOKEN:
             try:
@@ -267,7 +269,27 @@ class ThreadsScraperPremium:
             except Exception as e:
                 logger.debug(f"Meta API falló: {e}")
 
-        # ─── Estrategia 2: Playwright Headless ────────────────
+        # ─── Estrategia 2: LLM Scraper (Node.js) ──────────────
+        # Usa llm-scraper + Groq/OpenAI para extracción inteligente vía LLM.
+        # Groq tiene free tier (gratis), OpenAI requiere OPENAI_API_KEY.
+        # El LLM entiende la página aunque tenga anti-bot, y puede
+        # incluso usar screenshot (multimodal) si el HTML está ofuscado.
+        try:
+            data = await llm_scrape_profile(
+                clean_handle,
+                provider=LLM_PROVIDER,
+                timeout=LLM_SCRAPER_TIMEOUT,
+            )
+            if data and data.get("followers", 0) > 0:
+                logger.info(f"✅ LLM Scraper: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                return data
+        except Exception as e:
+            logger.debug(f"LLM Scraper falló: {e}")
+
+        # Flag: si Playwright detectó login wall, saltar estrategias httpx
+        login_detected = False
+
+        # ─── Estrategia 3: Playwright Headless ────────────────
         try:
             data = await self._playwright_extract(clean_handle)
             if data and data.get("followers", 0) > 0:
@@ -280,7 +302,7 @@ class ThreadsScraperPremium:
         except Exception as e:
             logger.debug(f"Playwright falló: {e}")
 
-        # ─── Estrategia 3: oEmbed (Playwright) ────────────────
+        # ─── Estrategia 4: oEmbed (Playwright) ────────────────
         if not login_detected:
             try:
                 data = await self._oembed_extract(clean_handle)
@@ -290,13 +312,13 @@ class ThreadsScraperPremium:
             except Exception as e:
                 logger.debug(f"oEmbed falló: {e}")
 
-        # ─── Estrategias httpx (4 y 5) ────────────────────────
+        # ─── Estrategias httpx (5 y 6) ────────────────────────
         # threads.com bloquea httpx (redirect a login), saltar si ya detectamos login
         if login_detected:
-            logger.warning(f"⛔ threads.com bloquea httpx para @{clean_handle} — saltando estrategias 4 y 5")
+            logger.warning(f"⛔ threads.com bloquea httpx para @{clean_handle} — saltando estrategias 5 y 6")
             return None
 
-        # Estrategia 4: GraphQL Directo
+        # Estrategia 5: GraphQL Directo
         try:
             user_id = self._resolve_user_id(clean_handle)
             if user_id:
@@ -307,7 +329,7 @@ class ThreadsScraperPremium:
         except Exception as e:
             logger.debug(f"GraphQL falló: {e}")
 
-        # Estrategia 5: Static HTML
+        # Estrategia 6: Static HTML
         try:
             data = self._fallback_extract(clean_handle)
             if data and data.get("followers", 0) > 0:

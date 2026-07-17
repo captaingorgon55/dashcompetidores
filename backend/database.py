@@ -32,9 +32,8 @@ class Competitor(Base):
     color = Column(String(7), default="#3B82F6")
     is_us = Column(Boolean, default=False)
     notes = Column(Text)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
-                        onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -56,7 +55,7 @@ class ThreadsSnapshot(Base):
     top_post_text = Column(Text)
     top_post_likes = Column(Integer, default=0)
     top_post_replies = Column(Integer, default=0)
-    snapshot_date = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    snapshot_date = Column(DateTime, default=datetime.utcnow, index=True)
     raw_data = Column(JSON)  # full scrape dump
 
 
@@ -74,7 +73,7 @@ class ThreadsPost(Base):
     has_image = Column(Boolean, default=False)
     has_video = Column(Boolean, default=False)
     posted_at = Column(DateTime)
-    scraped_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    scraped_at = Column(DateTime, default=datetime.utcnow)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -142,7 +141,7 @@ class ManualEntry(Base):
     metric_text = Column(Text)
     entry_date = Column(DateTime, nullable=False, index=True)
     notes = Column(Text)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -161,7 +160,7 @@ class GoogleToken(Base):
     token_type = Column(String(50), default="Bearer")
     user_email = Column(String(200), default="")
     user_name = Column(String(200), default="")
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # ══════════════════════════════════════════════════════════════

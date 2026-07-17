@@ -280,7 +280,7 @@ async def scrape_competitor_threads(
         following=data.get("following", 0),
         posts_count=data.get("posts", 0),
         engagement_rate=engagement_rate,
-        snapshot_date=datetime.now(timezone.utc),
+        snapshot_date=datetime.utcnow(),
         raw_data=data,
     )
     db.add(snapshot)
@@ -300,7 +300,7 @@ async def scrape_competitor_threads(
                     reposts=p.get("reposts", 0),
                     has_image=p.get("has_image", False),
                     has_video=p.get("has_video", False),
-                    posted_at=datetime.fromtimestamp(p["taken_at"], tz=timezone.utc)
+                    posted_at=datetime.utcfromtimestamp(p["taken_at"])
                     if p.get("taken_at") else None,
                 )
                 db.add(post)
@@ -338,7 +338,7 @@ async def scrape_all_threads(
                     followers=data.get("followers", 0),
                     following=data.get("following", 0),
                     posts_count=data.get("posts", 0),
-                    snapshot_date=datetime.now(timezone.utc),
+                    snapshot_date=datetime.utcnow(),
                     raw_data=data,
                 )
                 db.add(snapshot)
@@ -371,7 +371,7 @@ async def get_threads_snapshots(
     db: AsyncSession = Depends(get_session),
 ):
     """Historical Threads snapshots."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = datetime.utcnow() - timedelta(days=days)
     result = await db.execute(
         select(ThreadsSnapshot)
         .where(ThreadsSnapshot.competitor_id == competitor_id)
@@ -421,7 +421,7 @@ async def get_all_latest_threads(db: AsyncSession = Depends(get_session)):
                 "engagement_rate": latest.engagement_rate if latest else 0,
                 "snapshot_date": latest.snapshot_date.isoformat() if latest else None,
                 "needs_update": not latest or (
-                    datetime.now(timezone.utc) - latest.snapshot_date
+                    datetime.utcnow() - latest.snapshot_date
                 ).total_seconds() > 3600,
             } if latest else None,
         })
@@ -469,7 +469,7 @@ async def get_discover_data(
     db: AsyncSession = Depends(get_session),
 ):
     """Get Google Discover performance data."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = datetime.utcnow() - timedelta(days=days)
     result = await db.execute(
         select(DiscoverDaily)
         .where(DiscoverDaily.competitor_id == competitor_id)
@@ -495,7 +495,7 @@ async def get_search_data(
     db: AsyncSession = Depends(get_session),
 ):
     """Get Google Search performance data."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = datetime.utcnow() - timedelta(days=days)
     result = await db.execute(
         select(SearchConsoleDaily)
         .where(SearchConsoleDaily.competitor_id == competitor_id)
@@ -530,7 +530,7 @@ async def create_manual_entry(
         raise HTTPException(404, "Competitor not found")
 
     try:
-        entry_date = datetime.strptime(entry.entry_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        entry_date = datetime.strptime(entry.entry_date, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD")
 
@@ -557,7 +557,7 @@ async def get_manual_entries(
     db: AsyncSession = Depends(get_session),
 ):
     """Get manual entries with optional filters."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = datetime.utcnow() - timedelta(days=days)
     query = select(ManualEntry).where(ManualEntry.entry_date >= cutoff)
 
     if competitor_id:
@@ -745,7 +745,7 @@ async def dashboard_summary(db: AsyncSession = Depends(get_session)):
             follower_growth = ((ts.followers - ts_prev.followers) / ts_prev.followers) * 100
 
         # Latest 7 days traffic
-        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        week_ago = datetime.utcnow() - timedelta(days=7)
         traffic_result = await db.execute(
             select(func.sum(TrafficDaily.sessions))
             .where(TrafficDaily.competitor_id == comp.id)

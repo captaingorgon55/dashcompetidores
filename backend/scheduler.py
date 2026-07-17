@@ -52,7 +52,7 @@ async def scrape_all_threads():
                         followers=data.get("followers", 0),
                         following=data.get("following", 0),
                         posts_count=data.get("posts", 0),
-                        snapshot_date=datetime.now(timezone.utc),
+                        snapshot_date=datetime.utcnow(),
                         raw_data=data,
                     )
                     session.add(snapshot)

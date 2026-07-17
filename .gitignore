@@ -18,7 +18,10 @@ build/
 .venv/
 venv/
 env/
+
+# Secrets — never commit real .env
 .env
+!.env.example
 
 # Database (local SQLite)
 backend/data/*.db

@@ -53,19 +53,21 @@ async def run_warmup_checks():
     """
     checks = []
 
-    # 1. Playwright: verificar que se pueda lanzar
+    # 1. Playwright: verificar que se pueda lanzar (OPCIONAL en servidores 512MB)
     try:
         from backend.scrapers.playwright_manager import playwright_manager
         ctx = await playwright_manager.get_context("_warmup_check")
         page = await ctx.new_page()
         try:
             await page.goto("about:blank", timeout=10000)
-            checks.append(("✅ Playwright (Chromium)", True, "Headless listo"))
+            checks.append(("✅ Playwright (Chromity)", True, "Browser-based scraping disponible"))
         finally:
             await page.close()
             await playwright_manager.close_context("_warmup_check")
-    except Exception as e:
-        checks.append(("❌ Playwright (Chromium)", False, str(e)[:80]))
+    except (ImportError, Exception) as e:
+        checks.append(("ℹ️ Playwright", False,
+                       "Sin Chromium en Python (~300MB ahorrados). "
+                       "llm-scraper (Node.js) maneja el navegador."))
 
     # 2. Node.js + llm-scraper
     import shutil

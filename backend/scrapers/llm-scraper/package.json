@@ -6,7 +6,8 @@
   "main": "threads-scraper.mjs",
   "scripts": {
     "scrape": "node threads-scraper.mjs",
-    "generate": "node generate-code.mjs"
+    "generate": "node generate-code.mjs",
+    "install-browser": "npx playwright install chromium-headless-shell"
   },
   "dependencies": {
     "llm-scraper": "^2.0.0",
@@ -15,5 +16,8 @@
     "zod-to-json-schema": "^3.23.0",
     "@ai-sdk/openai": "^1.0.0",
     "ai": "^4.0.0"
+  },
+  "playwright": {
+    "skip_browser_download": true
   }
 }

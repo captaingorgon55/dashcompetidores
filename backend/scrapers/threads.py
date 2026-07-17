@@ -55,8 +55,20 @@ from backend.config import (
     MAX_RETRIES, META_APP_ID, META_ACCESS_TOKEN, PROXY_URL,
     PLAYWRIGHT_TIMEOUT_MS, LLM_PROVIDER, LLM_API_KEY, LLM_SCRAPER_TIMEOUT,
 )
-from backend.scrapers.playwright_manager import playwright_manager
 from backend.scrapers.llm_scraper_bridge import llm_scrape_profile, llm_scrape_posts
+
+# Playwright es OPCIONAL — en servidores con 512MB lo quitamos de requirements.txt
+# para ahorrar ~300MB en la descarga de Chromium.
+# Sin Playwright, el scraper salta Estrategias 3 y 4 (browser-based) y
+# depende de llm-scraper (Node.js) para extracción con navegador.
+PLAYWRIGHT_AVAILABLE = False
+playwright_manager = None
+try:
+    from backend.scrapers.playwright_manager import playwright_manager
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.info("ℹ️ Playwright no disponible — estrategias 3 y 4 saltadas. Usar llm-scraper para browser.")
 
 logger = logging.getLogger(__name__)
 
@@ -290,20 +302,23 @@ class ThreadsScraperPremium:
         login_detected = False
 
         # ─── Estrategia 3: Playwright Headless ────────────────
-        try:
-            data = await self._playwright_extract(clean_handle)
-            if data and data.get("followers", 0) > 0:
-                logger.info(f"✅ Playwright: @{clean_handle} — {data.get('followers', 0)} seguidores")
-                return data
-            if data is None:
-                # Si Playwright devolvió None pero no lanzó excepción,
-                # probablemente fue redirigido a login
-                login_detected = True
-        except Exception as e:
-            logger.warning(f"⚠️ Playwright falló para @{clean_handle}: {e}")
+        if PLAYWRIGHT_AVAILABLE:
+            try:
+                data = await self._playwright_extract(clean_handle)
+                if data and data.get("followers", 0) > 0:
+                    logger.info(f"✅ Playwright: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                    return data
+                if data is None:
+                    # Si Playwright devolvió None pero no lanzó excepción,
+                    # probablemente fue redirigido a login
+                    login_detected = True
+            except Exception as e:
+                logger.warning(f"⚠️ Playwright falló para @{clean_handle}: {e}")
+        else:
+            logger.debug(f"⏭️ Playwright no disponible — saltando Estrategia 3 para @{clean_handle}")
 
         # ─── Estrategia 4: oEmbed (Playwright) ────────────────
-        if not login_detected:
+        if not login_detected and PLAYWRIGHT_AVAILABLE:
             try:
                 data = await self._oembed_extract(clean_handle)
                 if data:
@@ -311,6 +326,8 @@ class ThreadsScraperPremium:
                     return data
             except Exception as e:
                 logger.warning(f"⚠️ oEmbed falló para @{clean_handle}: {e}")
+        elif not PLAYWRIGHT_AVAILABLE:
+            logger.debug(f"⏭️ Playwright no disponible — saltando Estrategia 4 para @{clean_handle}")
 
         # ─── Estrategias httpx (5 y 6) ────────────────────────
         # threads.com bloquea httpx (redirect a login), saltar si ya detectamos login
@@ -1066,13 +1083,16 @@ async def scrape_threads_posts(handle: str, limit: int = 10) -> list[dict]:
             except Exception:
                 pass
 
-        # Playwright headless
-        try:
-            posts = await scraper._playwright_extract_posts(clean_handle, limit)
-            if posts:
-                return posts
-        except Exception:
-            pass
+        # Playwright headless (solo si está disponible)
+        if PLAYWRIGHT_AVAILABLE:
+            try:
+                posts = await scraper._playwright_extract_posts(clean_handle, limit)
+                if posts:
+                    return posts
+            except Exception:
+                pass
+        else:
+            logger.debug(f"⏭️ Playwright no disponible — saltando extracción de posts para @{clean_handle}")
 
         # GraphQL directo
         user_id = await asyncio.get_event_loop().run_in_executor(

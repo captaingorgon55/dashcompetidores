@@ -7,12 +7,13 @@ services:
     runtime: python
     region: ohio
     plan: free
-    buildCommand: pip install -r backend/requirements.txt
+    buildCommand: >-
+      pip install -r backend/requirements.txt &&
+      playwright install chromium --with-deps &&
+      cd backend/scrapers/llm-scraper && npm install
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.12
       - key: HOST
         value: 0.0.0.0
       - key: DEBUG
@@ -23,3 +24,7 @@ services:
         sync: false
       - key: SITE_URL
         value: sc-domain:elespectador.com
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: groq

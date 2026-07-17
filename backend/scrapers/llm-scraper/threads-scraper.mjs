@@ -108,11 +108,19 @@ async function scrapeThreadsProfile(handle, options = {}) {
   // Inicializar LLM provider
   const providerFn = PROVIDER_CONFIGS[provider];
   if (!providerFn) {
-    throw new Error(`Provider desconocido: ${provider}. Usa: ${Object.keys(PROVIDER_CONFIGS).join(', ')}`);
+    return { status: 'error', error: `Provider desconocido: ${provider}. Usa: ${Object.keys(PROVIDER_CONFIGS).join(', ')}` };
   }
-  const llm = providerFn();
+
+  let llm;
+  try {
+    llm = providerFn();
+  } catch (err) {
+    console.error(`⚠️ Error en provider ${provider}: ${err.message}`);
+    return { status: 'no_key', error: err.message, provider };
+  }
 
   // Inicializar Playwright
+  console.error(`🚀 Lanzando Chromium via Playwright (llm-scraper)...`);
   const browser = await chromium.launch({
     headless: true,
     args: [

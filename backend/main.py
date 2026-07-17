@@ -44,12 +44,96 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ─── Warmup Checks ──────────────────────────────────────────────
+
+async def run_warmup_checks():
+    """
+    Verifica al inicio que los componentes críticos funcionen.
+    Sin esto, los errores pasan desapercibidos (se loguean a DEBUG).
+    """
+    checks = []
+
+    # 1. Playwright: verificar que se pueda lanzar
+    try:
+        from backend.scrapers.playwright_manager import playwright_manager
+        ctx = await playwright_manager.get_context("_warmup_check")
+        page = await ctx.new_page()
+        try:
+            await page.goto("about:blank", timeout=10000)
+            checks.append(("✅ Playwright (Chromium)", True, "Headless listo"))
+        finally:
+            await page.close()
+            await playwright_manager.close_context("_warmup_check")
+    except Exception as e:
+        checks.append(("❌ Playwright (Chromium)", False, str(e)[:80]))
+
+    # 2. Node.js + llm-scraper
+    import shutil
+    node_path = shutil.which("node")
+    if node_path:
+        checks.append(("✅ Node.js", True, node_path))
+        import os
+        from backend.config import LLM_PROVIDER
+        from backend.scrapers.llm_scraper_bridge import PROVIDER_KEY_ENV
+        required_envs = PROVIDER_KEY_ENV.get(LLM_PROVIDER, [])
+        has_key = any(os.environ.get(env) for env in required_envs)
+        if has_key:
+            checks.append(("✅ LLM Scraper", True, f"Provider: {LLM_PROVIDER}"))
+        else:
+            checks.append(("⚠️ LLM Scraper", False,
+                           f"Falta clave API. Proveedor: {LLM_PROVIDER}. "
+                           f"Variables: {', '.join(required_envs)}. "
+                           f"Regístrate gratis en console.groq.com"))
+    else:
+        checks.append(("❌ Node.js", False, "No encontrado en PATH"))
+
+    # 3. httpx (verificar acceso a threads.com)
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://www.threads.com/@elespectador")
+            if resp.status_code == 200:
+                checks.append(("✅ threads.com", True, "Responde 200 OK (httpx)"))
+                # Detectar si es login page
+                if "/login" in resp.text[:500]:
+                    checks.append(("⚠️ threads.com", True,
+                                   "Devuelve página login a httpx. Necesita Playwright."))
+            else:
+                checks.append(("⚠️ threads.com", False, f"Status: {resp.status_code}"))
+    except Exception as e:
+        checks.append(("❌ threads.com", False, str(e)[:60]))
+
+    # 4. Meta API
+    from backend.config import META_ACCESS_TOKEN
+    if META_ACCESS_TOKEN:
+        checks.append(("✅ Meta API", True, "Token configurado"))
+    else:
+        checks.append(("ℹ️ Meta API", False, "Sin token. Usa Meta App Review."))
+
+    logger.info("=" * 60)
+    logger.info("🏁 WARMUP CHECKS — Estado del sistema")
+    logger.info("=" * 60)
+    for name, ok, detail in checks:
+        if ok:
+            logger.info(f"  {name} — {detail}")
+        else:
+            logger.warning(f"  {name} — {detail}")
+    logger.info("=" * 60)
+
+    return checks
+
+
 # ─── Lifecycle ───────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await seed_default_competitors()
+    # Warmup: verificar Playwright, Node.js, threads.com
+    try:
+        await run_warmup_checks()
+    except Exception as e:
+        logger.warning(f"Warmup check falló: {e}")
     # Iniciar scheduler de tareas automáticas
     try:
         init_bg_scheduler()

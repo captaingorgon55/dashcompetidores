@@ -55,20 +55,8 @@ from backend.config import (
     MAX_RETRIES, META_APP_ID, META_ACCESS_TOKEN, PROXY_URL,
     PLAYWRIGHT_TIMEOUT_MS, LLM_PROVIDER, LLM_API_KEY, LLM_SCRAPER_TIMEOUT,
 )
-try:
-    from backend.scrapers.playwright_manager import playwright_manager
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    playwright_manager = None
-    PLAYWRIGHT_AVAILABLE = False
-
-try:
-    from backend.scrapers.llm_scraper_bridge import llm_scrape_profile, llm_scrape_posts
-    LLM_SCRAPER_AVAILABLE = True
-except ImportError:
-    llm_scrape_profile = None
-    llm_scrape_posts = None
-    LLM_SCRAPER_AVAILABLE = False
+from backend.scrapers.playwright_manager import playwright_manager
+from backend.scrapers.llm_scraper_bridge import llm_scrape_profile, llm_scrape_posts
 
 logger = logging.getLogger(__name__)
 
@@ -282,43 +270,47 @@ class ThreadsScraperPremium:
                 logger.debug(f"Meta API falló: {e}")
 
         # ─── Estrategia 2: LLM Scraper (Node.js) ──────────────
-        if LLM_SCRAPER_AVAILABLE:
-            try:
-                data = await llm_scrape_profile(
-                    clean_handle,
-                    provider=LLM_PROVIDER,
-                    timeout=LLM_SCRAPER_TIMEOUT,
-                )
-                if data and data.get("followers", 0) > 0:
-                    logger.info(f"✅ LLM Scraper: @{clean_handle} — {data.get('followers', 0)} seguidores")
-                    return data
-            except Exception as e:
-                logger.debug(f"LLM Scraper falló: {e}")
+        # Usa llm-scraper + Groq/OpenAI para extracción inteligente vía LLM.
+        # Groq tiene free tier (gratis), OpenAI requiere OPENAI_API_KEY.
+        # El LLM entiende la página aunque tenga anti-bot, y puede
+        # incluso usar screenshot (multimodal) si el HTML está ofuscado.
+        try:
+            data = await llm_scrape_profile(
+                clean_handle,
+                provider=LLM_PROVIDER,
+                timeout=LLM_SCRAPER_TIMEOUT,
+            )
+            if data and data.get("followers", 0) > 0:
+                logger.info(f"✅ LLM Scraper: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                return data
+        except Exception as e:
+            logger.warning(f"⚠️ LLM Scraper falló para @{clean_handle}: {e}")
 
         # Flag: si Playwright detectó login wall, saltar estrategias httpx
         login_detected = False
 
         # ─── Estrategia 3: Playwright Headless ────────────────
-        if PLAYWRIGHT_AVAILABLE:
-            try:
-                data = await self._playwright_extract(clean_handle)
-                if data and data.get("followers", 0) > 0:
-                    logger.info(f"✅ Playwright: @{clean_handle} — {data.get('followers', 0)} seguidores")
-                    return data
-                if data is None:
-                    login_detected = True
-            except Exception as e:
-                logger.debug(f"Playwright falló: {e}")
+        try:
+            data = await self._playwright_extract(clean_handle)
+            if data and data.get("followers", 0) > 0:
+                logger.info(f"✅ Playwright: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                return data
+            if data is None:
+                # Si Playwright devolvió None pero no lanzó excepción,
+                # probablemente fue redirigido a login
+                login_detected = True
+        except Exception as e:
+            logger.warning(f"⚠️ Playwright falló para @{clean_handle}: {e}")
 
         # ─── Estrategia 4: oEmbed (Playwright) ────────────────
-        if PLAYWRIGHT_AVAILABLE and not login_detected:
+        if not login_detected:
             try:
                 data = await self._oembed_extract(clean_handle)
                 if data:
                     logger.info(f"✅ oEmbed: @{clean_handle}")
                     return data
             except Exception as e:
-                logger.debug(f"oEmbed falló: {e}")
+                logger.warning(f"⚠️ oEmbed falló para @{clean_handle}: {e}")
 
         # ─── Estrategias httpx (5 y 6) ────────────────────────
         # threads.com bloquea httpx (redirect a login), saltar si ya detectamos login

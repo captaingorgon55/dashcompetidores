@@ -6,9 +6,11 @@ Esto nos permite usar la librería llm-scraper (TypeScript) desde
 nuestro backend Python.
 
 Estrategias:
-1. Groq (gratis) — Llama 3.3 70B, sin API key requerida? (tiene free tier)
+1. Groq (gratis) — Llama 3.3 70B, tier gratuito (sin tarjeta)
 2. OpenAI — GPT-4o-mini (rápido y barato)
 3. Ollama — Local, completamente gratis
+
+⚠️ Verifica automáticamente si hay API key antes de ejecutar Node.js.
 """
 
 import asyncio
@@ -19,6 +21,13 @@ from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# API key requirements por provider
+PROVIDER_KEY_ENV = {
+    "groq": ["GROQ_API_KEY", "LLM_API_KEY"],
+    "openai": ["OPENAI_API_KEY", "LLM_API_KEY"],
+    "openai_large": ["OPENAI_API_KEY", "LLM_API_KEY"],
+}
 
 # Ruta al proyecto Node.js
 LLM_SCRAPER_DIR = Path(__file__).parent / "llm-scraper"
@@ -45,11 +54,20 @@ async def llm_scrape_profile(
     """
     clean_handle = handle.lstrip("@")
 
+    # 1. Verificar que el script exista
     if not THREADS_SCRAPER_SCRIPT.exists():
         logger.error(f"❌ Script llm-scraper no encontrado: {THREADS_SCRAPER_SCRIPT}")
         return None
 
-    # Verificar que Node.js esté disponible en PATH
+    # 2. Verificar API key antes de ejecutar Node.js
+    required_envs = PROVIDER_KEY_ENV.get(provider, [])
+    has_key = any(os.environ.get(env) for env in required_envs)
+    if not has_key:
+        logger.warning(f"⚠️ llm-scraper saltado para @{clean_handle}: falta API key para provider '{provider}'")
+        logger.warning(f"   Necesitas una de: {', '.join(required_envs)}")
+        return None
+
+    # 3. Verificar que Node.js esté disponible
     import shutil
     node_path = shutil.which("node") or "node"
 
@@ -87,10 +105,10 @@ async def llm_scrape_profile(
         stderr_text = stderr.decode().strip()
         if stderr_text:
             for line in stderr_text.split("\n"):
-                logger.debug(f"  [llm-scraper] {line}")
+                logger.warning(f"  [llm-scraper] {line}")
 
         if process.returncode != 0:
-            logger.warning(f"❌ llm-scraper exit code: {process.returncode}")
+            logger.warning(f"❌ llm-scraper exit code: {process.returncode} — stderr arriba ^")
             return None
 
         # Parsear JSON de salida
@@ -101,8 +119,11 @@ async def llm_scrape_profile(
             logger.debug(f"   stdout: {stdout.decode()[:500]}")
             return None
 
-        if result.get("status") == "error":
-            logger.warning(f"❌ llm-scraper error: {result.get('error', 'unknown')}")
+        if result.get("status") in ("error", "no_key"):
+            if result.get("status") == "no_key":
+                logger.debug(f"⏭️ llm-scraper sin clave API para @{clean_handle}: {result.get('error', '')}")
+            else:
+                logger.warning(f"❌ llm-scraper error: {result.get('error', 'unknown')}")
             return None
 
         # Extraer datos en formato compatible con ThreadsScraperPremium

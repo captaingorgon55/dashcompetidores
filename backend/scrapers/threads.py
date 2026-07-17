@@ -1,424 +1,998 @@
 """
-Threads Scraper v2 — Extracción de datos reales vía GraphQL API interna.
+Threads Scraper v3 — Premium — Extracción profunda con Playwright.
 
-Usa el endpoint interno de GraphQL de Threads para obtener datos públicos
-de perfil: seguidores, siguiendo, posts, y métricas de engagement.
+Arquitectura de estrategias (fallback chain):
 
-Threads no tiene API pública oficial para leer datos de otros perfiles,
-pero su interfaz web usa GraphQL interno con Doc IDs identificables.
+  ┌─ 1. Meta Graph API (Opcional — requiere App aprobada)
+  │     GET /{api-version}/{user-id}/profile_lookup?username={username}
+  │     GET /{api-version}/{user-id}/profile_posts?username={username}
+  │
+  ├─ 2. Playwright Headless (Principal)
+  │     ├─ Network Interception → captura respuestas GraphQL en vivo
+  │     ├─ Hidden JSON → extrae <script type="application/json" data-sjs>
+  │     └─ Auto-scroll → carga posts adicionales
+  │
+  ├─ 3. oEmbed API
+  │     GET https://threads.net/api/oembed?url=...
+  │     → datos básicos embed
+  │
+  ├─ 4. httpx GraphQL Directo
+  │     POST https://www.threads.net/api/graphql
+  │     → doc_ids, rotating UAs
+  │
+  └─ 5. Static HTML (Último recurso)
+        BeautifulSoup + meta tags + JSON-LD
 
-Referencia: https://github.com/m1guelpf/threads-api
+Mejoras v3:
+  ✅ Navegador headless real (JS ejecutado)
+  ✅ Captura de JSON oculto (data-sjs)
+  ✅ Network interception para GraphQL
+  ✅ Rotación de User-Agents
+  ✅ Jitter + backoff exponencial
+  ✅ Proxy support
+  ✅ Auto-scroll para posts
+  ✅ Extracción de contenido real (texto, imágenes, engagement)
 """
 
-import re
+import asyncio
 import json
 import logging
-import asyncio
+import random
+import re
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
 
-from backend.config import USER_AGENT
+from backend.config import (
+    USER_AGENTS, MIN_DELAY_BETWEEN_REQUESTS, MAX_DELAY_BETWEEN_REQUESTS,
+    MAX_RETRIES, META_APP_ID, META_ACCESS_TOKEN, PROXY_URL,
+    PLAYWRIGHT_TIMEOUT_MS,
+)
+from backend.scrapers.playwright_manager import playwright_manager
 
 logger = logging.getLogger(__name__)
 
 
-class ThreadsScraper:
-    """Scrapes public profile data from Threads.net usando GraphQL interno."""
+# ══════════════════════════════════════════════════════════════
+# Utilidades
+# ══════════════════════════════════════════════════════════════
+
+def _get_random_ua() -> str:
+    """Retorna un User-Agent aleatorio de la lista configurada."""
+    return random.choice(USER_AGENTS)
+
+
+def _jitter_delay(base_min: float = None, base_max: float = None):
+    """Pausa con jitter aleatorio para evitar rate limiting."""
+    min_d = base_min or MIN_DELAY_BETWEEN_REQUESTS
+    max_d = base_max or MAX_DELAY_BETWEEN_REQUESTS
+    delay = random.uniform(min_d, max_d)
+    time.sleep(delay)
+
+
+async def _a_jitter_delay(base_min: float = None, base_max: float = None):
+    """Versión async del jitter delay."""
+    min_d = base_min or MIN_DELAY_BETWEEN_REQUESTS
+    max_d = base_max or MAX_DELAY_BETWEEN_REQUESTS
+    delay = random.uniform(min_d, max_d)
+    await asyncio.sleep(delay)
+
+
+def _exponential_backoff(attempt: int, base_delay: float = 2.0) -> float:
+    """Calcula delay con backoff exponencial: 2^attempt * base_delay + jitter."""
+    return (base_delay * (2 ** attempt)) + random.uniform(0, 1)
+
+
+def _parse_count(text) -> int:
+    """Parsea strings como '1.2M', '500K', '1,234' a enteros.
+
+    Estrategia:
+    1. Extraer el sufijo (K, M, B, MIL) ANTES de limpiar decimales
+    2. Limpiar solo comas (separadores de miles)
+    3. El punto decimal se conserva para float()
+    """
+    if not text:
+        return 0
+    if isinstance(text, (int, float)):
+        return int(text)
+
+    raw = str(text).strip().upper()
+
+    multipliers = {"B": 1_000_000_000, "M": 1_000_000, "K": 1_000, "MIL": 1_000}
+
+    # 1. Detectar sufijo primero
+    suffix = ""
+    for s in sorted(multipliers, key=len, reverse=True):
+        if raw.endswith(s):
+            suffix = s
+            break
+
+    # 2. Extraer la parte numérica y limpiar
+    if suffix:
+        number_str = raw[:-len(suffix)].rstrip("S")  # quitar "S" de "MIL" plural
+    else:
+        number_str = raw
+
+    # 3. Limpiar solo comas (separador de miles), conservar punto decimal
+    number_str = number_str.replace(",", "").replace(".", ".")  # no-op, solo claridad
+
+    try:
+        value = float(number_str)
+        if suffix:
+            return int(value * multipliers[suffix])
+        return int(value)
+    except ValueError:
+        return 0
+
+
+def _extract_from_hidden_json(html: str) -> Optional[dict]:
+    """
+    Extrae datos estructurados de los <script type="application/json" data-sjs>.
+    Threads embebe TODOS los datos de la página en estos scripts JSON.
+
+    Returns: dict con los datos combinados de todos los scripts JSON encontrados.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    scripts = soup.find_all("script", type="application/json")
+
+    combined = {}
+    for script in scripts:
+        if not script.string:
+            continue
+        # Filtrar scripts con data-sjs (contienen datos reales)
+        if script.get("data-sjs") is None and not any(
+            key in (script.string[:500]) for key in ["user", "thread", "follower"]
+        ):
+            continue
+        try:
+            data = json.loads(script.string)
+            if isinstance(data, dict):
+                combined.update(data)
+            elif isinstance(data, list):
+                combined["_list_items"] = data
+        except (json.JSONDecodeError, AttributeError):
+            continue
+
+    return combined if combined else None
+
+
+def _deep_find(obj, target_keys: set, max_depth: int = 20, _depth: int = 0):
+    """
+    Búsqueda recursiva profunda limitada en estructuras JSON.
+    Retorna el primer dict que contenga TODOS los target_keys.
+    """
+    if _depth > max_depth:
+        return None
+    if isinstance(obj, dict):
+        if target_keys.issubset(obj.keys()):
+            # Verificar que tenga valores reales
+            if any(obj.get(k) for k in target_keys):
+                return obj
+        for v in obj.values():
+            result = _deep_find(v, target_keys, max_depth, _depth + 1)
+            if result:
+                return result
+    elif isinstance(obj, list):
+        for item in obj:
+            result = _deep_find(item, target_keys, max_depth, _depth + 1)
+            if result:
+                return result
+    return None
+
+
+# ══════════════════════════════════════════════════════════════
+# Scraper Premium
+# ══════════════════════════════════════════════════════════════
+
+class ThreadsScraperPremium:
+    """
+    Scraper premium de Threads con múltiples estrategias de extracción.
+
+    Características:
+    - Rotación de User-Agents
+    - Jitter y backoff exponencial
+    - Playwright headless (JS real)
+    - Network interception (captura GraphQL)
+    - Hidden JSON parsing (data-sjs)
+    - oEmbed API fallback
+    - GraphQL directo (httpx)
+    - Proxy support
+    """
 
     BASE_URL = "https://www.threads.net"
     GRAPHQL_URL = "https://www.threads.net/api/graphql"
+    OEMBED_URL = "https://threads.net/api/oembed"
     IG_APP_ID = "238260118697367"
+    META_GRAPH_API = "https://graph.threads.net"
+    META_API_VERSION = "v21.0"
 
-    # Doc IDs known for Threads GraphQL queries (may change, multiples como fallback)
-    PROFILE_DOC_IDS = ["23996318473300828", "23996318473300827"]
+    # Doc IDs conocidos
+    PROFILE_DOC_IDS = [
+        "23996318473300828",
+        "23996318473300827",
+    ]
+    POSTS_DOC_ID = "6232751443445612"
+    REPLIES_DOC_ID = "6307072669391286"
 
     def __init__(self):
-        self.client = httpx.Client(
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
-                "x-ig-app-id": self.IG_APP_ID,
-                "x-asbd-id": "129477",
-                "Sec-Fetch-Site": "same-origin",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Dest": "empty",
-            },
-            follow_redirects=True,
-            timeout=30.0,
-        )
+        self._last_request_time = 0.0
+        self._httpx_client: Optional[httpx.Client] = None
 
-    def scrape_profile(self, handle: str) -> Optional[dict]:
+    def _get_client(self) -> httpx.Client:
+        """Obtiene (o crea) un cliente httpx con UA rotado."""
+        if self._httpx_client is None or not hasattr(self._httpx_client, 'headers'):
+            self._httpx_client = httpx.Client(
+                headers={
+                    "User-Agent": _get_random_ua(),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "x-ig-app-id": self.IG_APP_ID,
+                    "x-asbd-id": "129477",
+                    "Sec-Fetch-Site": "same-origin",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Dest": "empty",
+                },
+                follow_redirects=True,
+                timeout=30.0,
+            )
+        return self._httpx_client
+
+    def _rotate_ua(self):
+        """Rota el User-Agent del cliente httpx."""
+        if self._httpx_client:
+            self._httpx_client.headers["User-Agent"] = _get_random_ua()
+
+    async def scrape_profile(self, handle: str) -> Optional[dict]:
         """
-        Scrapea datos públicos de un perfil de Threads.
-
-        Args:
-            handle: @handle o handle sin @
-
-        Returns:
-            dict con datos del perfil o None si falla
+        Scrapea datos completos de un perfil de Threads.
+        Usa la cadena de estrategias hasta que una funcione.
         """
         clean_handle = handle.lstrip("@")
+        logger.info(f"🔍 Scrapeando perfil @{clean_handle}...")
 
-        # Estrategia 1: Obtener userID desde la página del perfil
-        user_id = self._resolve_user_id(clean_handle)
-        if not user_id:
-            logger.warning(f"No se pudo resolver userID para @{clean_handle}")
-            return self._fallback_extract(clean_handle)
+        # ─── Estrategia 1: Meta Graph API ─────────────────────
+        if META_ACCESS_TOKEN:
+            try:
+                data = await self._meta_graph_api_profile(clean_handle)
+                if data:
+                    logger.info(f"✅ Meta API: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                    return data
+            except Exception as e:
+                logger.debug(f"Meta API falló: {e}")
 
-        # Estrategia 2: Consultar GraphQL con el userID
-        profile_data = self._fetch_via_graphql(user_id, clean_handle)
-        if profile_data:
-            return profile_data
-
-        # Estrategia 3: Fallback a scraping de página
-        logger.info(f"Fallback a scraping de página para @{clean_handle}")
-        return self._fallback_extract(clean_handle)
-
-    def _resolve_user_id(self, handle: str) -> Optional[str]:
-        """
-        Obtiene el userID de Threads desde la página del perfil.
-        Busca en los scripts embedidos y meta tags.
-        """
-        url = f"{self.BASE_URL}/@{handle}"
+        # ─── Estrategia 2: Playwright Headless ────────────────
         try:
-            resp = self.client.get(url)
-            resp.raise_for_status()
+            data = await self._playwright_extract(clean_handle)
+            if data and data.get("followers", 0) > 0:
+                logger.info(f"✅ Playwright: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                return data
         except Exception as e:
-            logger.warning(f"Error fetching profile page @{handle}: {e}")
+            logger.debug(f"Playwright falló: {e}")
+
+        # ─── Estrategia 3: oEmbed API ─────────────────────────
+        try:
+            data = await self._oembed_extract(clean_handle)
+            if data:
+                logger.info(f"✅ oEmbed: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                return data
+        except Exception as e:
+            logger.debug(f"oEmbed falló: {e}")
+
+        # ─── Estrategia 4: GraphQL Directo (httpx) ────────────
+        try:
+            user_id = self._resolve_user_id(clean_handle)
+            if user_id:
+                data = self._fetch_via_graphql(user_id, clean_handle)
+                if data:
+                    logger.info(f"✅ GraphQL: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                    return data
+        except Exception as e:
+            logger.debug(f"GraphQL falló: {e}")
+
+        # ─── Estrategia 5: Static HTML ────────────────────────
+        try:
+            data = self._fallback_extract(clean_handle)
+            if data and data.get("followers", 0) > 0:
+                logger.info(f"✅ HTML fallback: @{clean_handle} — {data.get('followers', 0)} seguidores")
+                return data
+        except Exception as e:
+            logger.debug(f"HTML fallback falló: {e}")
+
+        logger.warning(f"❌ Todas las estrategias fallaron para @{clean_handle}")
+        return None
+
+    # ══════════════════════════════════════════════════════════
+    # ESTRATEGIA 1: Meta Graph API
+    # ══════════════════════════════════════════════════════════
+
+    async def _meta_graph_api_profile(self, handle: str) -> Optional[dict]:
+        """
+        Usa la API oficial de Meta (Profile Discovery).
+        Requiere META_ACCESS_TOKEN con permisos threads_profile_discovery.
+
+        Endpoints:
+        GET /{api-version}/{user-id}/profile_lookup?username={username}
+        """
+        if not META_ACCESS_TOKEN:
             return None
 
-        html = resp.text
-
-        # Buscar en scripts con datos JSON embedidos
-        patterns = [
-            r'"userID"\s*:\s*"(\d+)"',
-            r'"id"\s*:\s*"(\d+)"',
-            r'"user_id"\s*:\s*(\d+)',
-            r'"pk"\s*:\s*(\d+)',
-        ]
-
-        # Buscar en script tags
-        soup = BeautifulSoup(html, "lxml")
-        for script in soup.find_all("script"):
-            if not script.string:
-                continue
-            text = script.string
-            for pattern in patterns:
-                match = re.search(pattern, text)
-                if match:
-                    return match.group(1)
-
-            # Buscar en datos JSON grandes
-            if "userID" in text or "user_id" in text or '"pk"' in text:
-                # Intentar extraer objeto JSON que contenga el userID
-                for pattern in [
-                    r'"userID"\s*:\s*"(\d+)"',
-                    r'"pk"\s*:\s*(\d+)',
-                ]:
-                    match = re.search(pattern, text)
-                    if match:
-                        return match.group(1)
-
-        return None
-
-    def _fetch_via_graphql(self, user_id: str, handle: str) -> Optional[dict]:
-        """
-        Consulta el endpoint GraphQL interno de Threads.
-        """
-        for doc_id in self.PROFILE_DOC_IDS:
-            try:
-                data = self._graphql_request(doc_id, user_id, handle)
-                if data:
-                    return self._parse_graphql_response(data, handle)
-            except Exception as e:
-                logger.debug(f"GraphQL con Doc ID {doc_id} falló: {e}")
-                continue
-
-        return None
-
-    def _graphql_request(self, doc_id: str, user_id: str, handle: str) -> Optional[dict]:
-        """
-        Realiza la petición GraphQL a Threads.
-
-        Variables típicas:
-        {"userID": "userId"}
-        """
-        variables = json.dumps({"userID": user_id})
-        payload = {
-            "doc_id": doc_id,
-            "variables": variables,
+        api_url = f"{self.META_GRAPH_API}/{self.META_API_VERSION}/profile_lookup"
+        params = {
+            "username": handle,
+            "access_token": META_ACCESS_TOKEN,
+            "fields": "id,username,name,follower_count,biography,profile_pic_url,threads_count",
         }
 
-        try:
-            resp = self.client.post(
-                self.GRAPHQL_URL,
-                data=payload,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(api_url, params=params, timeout=15)
             if resp.status_code != 200:
-                logger.debug(f"GraphQL respondió {resp.status_code} para Doc ID {doc_id}")
+                logger.debug(f"Meta API respondió {resp.status_code}: {resp.text[:200]}")
                 return None
+            data = resp.json()
 
-            result = resp.json()
-            return result
-        except Exception as e:
-            logger.debug(f"Error en GraphQL request con Doc ID {doc_id}: {e}")
-            return None
-
-    def _parse_graphql_response(self, data: dict, handle: str) -> Optional[dict]:
-        """
-        Parsea la respuesta GraphQL para extraer datos del perfil.
-
-        La estructura varía según el Doc ID usado, así que navegamos
-        recursivamente buscando los campos que nos interesan.
-        """
-        profile = self._deep_search(data, {
-            "username": handle,
-            "follower_count": None,
-            "following_count": None,
-            "post_count": None,
-            "full_name": None,
-            "biography": None,
-            "profile_pic_url": None,
-            "pk": None,
-        })
-
-        if profile and profile.get("follower_count") is not None:
+        if "data" in data:
+            profile = data["data"]
             return {
                 "handle": f"@{handle}",
-                "name": profile.get("full_name", ""),
+                "name": profile.get("name", ""),
                 "bio": profile.get("biography", ""),
                 "followers": int(profile.get("follower_count", 0)),
-                "following": int(profile.get("following_count", 0)),
-                "posts": int(profile.get("post_count", 0)),
+                "posts": int(profile.get("threads_count", 0)),
                 "profile_pic": profile.get("profile_pic_url", ""),
-                "user_id": profile.get("pk", ""),
-                "source": "graphql",
+                "user_id": profile.get("id", ""),
+                "source": "meta_api",
                 "scraped_at": datetime.now(timezone.utc).isoformat(),
             }
 
         return None
 
-    def _deep_search(self, obj, targets: dict) -> Optional[dict]:
+    async def _meta_graph_api_posts(self, handle: str, limit: int = 10) -> list[dict]:
+        """Obtiene posts via Meta API Profile Posts endpoint."""
+        if not META_ACCESS_TOKEN:
+            return []
+
+        api_url = f"{self.META_GRAPH_API}/{self.META_API_VERSION}/profile_posts"
+        params = {
+            "username": handle,
+            "access_token": META_ACCESS_TOKEN,
+            "fields": "id,text,media_urls,permalink,timestamp,like_count,reply_count,repost_count",
+            "limit": min(limit, 25),
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(api_url, params=params, timeout=15)
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+
+        posts = []
+        for item in data.get("data", []):
+            posts.append({
+                "post_id": item.get("id", ""),
+                "text": item.get("text", ""),
+                "likes": int(item.get("like_count", 0)),
+                "replies": int(item.get("reply_count", 0)),
+                "reposts": int(item.get("repost_count", 0)),
+                "has_image": bool(item.get("media_urls")),
+                "has_video": False,
+                "taken_at": item.get("timestamp", ""),
+                "permalink": item.get("permalink", ""),
+                "source": "meta_api",
+            })
+
+        return posts
+
+    # ══════════════════════════════════════════════════════════
+    # ESTRATEGIA 2: Playwright Headless
+    # ══════════════════════════════════════════════════════════
+
+    async def _playwright_extract(self, handle: str) -> Optional[dict]:
         """
-        Búsqueda recursiva profunda en JSON buscando los campos target.
-        Retorna el primer objeto que contenga TODOS los campos target no-None.
+        Extrae datos usando Playwright headless con:
+        1. Network interception → captura respuestas del endpoint GraphQL
+        2. Hidden JSON → <script type="application/json" data-sjs>
+        3. Page content → meta tags y texto visible
         """
-        if isinstance(obj, dict):
-            # Verificar si este nodo contiene los datos buscados
-            match = True
-            for key in targets:
-                if key not in obj:
-                    match = False
+        profile_url = f"{self.BASE_URL}/@{handle}"
+
+        context = await playwright_manager.get_context(f"threads_{handle}")
+
+        # Configurar network interception
+        graphql_responses = []
+
+        async def intercept_response(response):
+            if "/api/graphql" in response.url:
+                try:
+                    body = await response.json()
+                    graphql_responses.append(body)
+                except Exception:
+                    pass
+
+        page = await context.new_page()
+
+        try:
+            page.on("response", intercept_response)
+
+            # Navegar al perfil
+            await page.goto(
+                profile_url,
+                wait_until="networkidle",
+                timeout=PLAYWRIGHT_TIMEOUT_MS,
+            )
+
+            # Esperar un poco para que carguen los scripts dinámicos
+            await _a_jitter_delay(2, 4)
+
+            # Obtener HTML después de renderizado JS
+            html = await page.content()
+
+            # Obtener el título de la página
+            title = await page.title()
+
+            # Intentar extraer texto visible de la página
+            page_text = await page.evaluate("() => document.body.innerText")
+
+            # ─── Extraer de Hidden JSON (data-sjs) ────────
+            hidden_data = _extract_from_hidden_json(html)
+
+            profile = None
+
+            # Buscar en hidden JSON primero
+            if hidden_data:
+                profile = _deep_find(hidden_data, {
+                    "follower_count", "username", "pk"
+                })
+                if not profile:
+                    # Intentar con menos keys
+                    profile = _deep_find(hidden_data, {
+                        "follower_count", "pk"
+                    })
+
+            # Buscar en respuestas GraphQL interceptadas
+            if not profile and graphql_responses:
+                for gql_resp in graphql_responses:
+                    profile = _deep_find(gql_resp, {
+                        "follower_count", "username", "pk"
+                    })
+                    if profile:
+                        break
+
+            # Si encontramos datos, construir resultado
+            if profile:
+                return {
+                    "handle": f"@{handle}",
+                    "name": profile.get("full_name", profile.get("name", "")),
+                    "bio": profile.get("biography", profile.get("bio", "")),
+                    "followers": int(profile.get("follower_count", 0)),
+                    "following": int(profile.get("following_count", 0)),
+                    "posts": int(profile.get("threads_count", profile.get("media_count", 0))),
+                    "profile_pic": profile.get("profile_pic_url", profile.get("profile_picture", "")),
+                    "user_id": str(profile.get("pk", profile.get("id", ""))),
+                    "source": "playwright_graphql",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                    "title": title,
+                }
+
+            # Extraer del texto visible de la página
+            followers = 0
+            posts = 0
+
+            # Buscar patrones de seguidores en el texto visible
+            follower_patterns = [
+                r'(\d[\d,.]*[KMBkmb]?)\s*(?:seguidores|follower|followers)',
+                r'(?:seguidores|follower|followers)\s*(\d[\d,.]*[KMBkmb]?)',
+            ]
+            for pattern in follower_patterns:
+                match = re.search(pattern, page_text, re.IGNORECASE)
+                if match:
+                    followers = _parse_count(match.group(1))
+                    if followers > 0:
+                        break
+
+            # Buscar posts
+            post_patterns = [
+                r'(\d[\d,.]*)\s*(?:publicaciones|posts|threads)',
+            ]
+            for pattern in post_patterns:
+                match = re.search(pattern, page_text, re.IGNORECASE)
+                if match:
+                    posts = _parse_count(match.group(1))
                     break
-            if match:
-                # Verificar que al menos tenga datos numéricos relevantes
-                if obj.get("follower_count") is not None:
-                    return obj
 
-            # Si no, seguir buscando
-            for key, value in obj.items():
-                if isinstance(value, (dict, list)):
-                    result = self._deep_search(value, targets)
-                    if result:
-                        return result
+            # Extraer nombre de meta tags
+            name = title.replace(f"(@{handle})", "").replace(f"(@{handle.lower()})", "").strip()
+            if "Threads" in name:
+                name = f"@{handle}"
 
-        elif isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, (dict, list)):
-                    result = self._deep_search(item, targets)
-                    if result:
-                        return result
+            if followers > 0:
+                return {
+                    "handle": f"@{handle}",
+                    "name": name.strip(" |"),
+                    "bio": "",
+                    "followers": followers,
+                    "following": 0,
+                    "posts": posts,
+                    "profile_pic": "",
+                    "user_id": "",
+                    "source": "playwright_text",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                    "title": title,
+                }
+
+            return None
+
+        finally:
+            await page.close()
+
+    async def _playwright_extract_posts(self, handle: str, limit: int = 10) -> list[dict]:
+        """Extrae posts usando Playwright con auto-scroll + network intercept."""
+        profile_url = f"{self.BASE_URL}/@{handle}"
+
+        context = await playwright_manager.get_context(f"threads_posts_{handle}")
+        graphql_responses = []
+
+        async def intercept_response(response):
+            if "/api/graphql" in response.url:
+                try:
+                    body = await response.json()
+                    graphql_responses.append(body)
+                except Exception:
+                    pass
+
+        page = await context.new_page()
+
+        try:
+            page.on("response", intercept_response)
+            await page.goto(
+                profile_url,
+                wait_until="networkidle",
+                timeout=30000,
+            )
+
+            await _a_jitter_delay(3, 5)
+
+            # Auto-scroll para cargar más posts
+            for scroll_attempt in range(3):
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await _a_jitter_delay(2, 4)
+
+            html = await page.content()
+            page_text = await page.evaluate("() => document.body.innerText")
+
+            posts = []
+
+            # 1. Intentar extraer de hidden JSON
+            hidden_data = _extract_from_hidden_json(html)
+            if hidden_data:
+                all_threads = []
+                def collect_threads(obj):
+                    if isinstance(obj, dict):
+                        if obj.get("thread_items") and isinstance(obj["thread_items"], list):
+                            for ti in obj["thread_items"]:
+                                if isinstance(ti, dict) and "post" in ti:
+                                    all_threads.append(ti["post"])
+                        for v in obj.values():
+                            collect_threads(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            collect_threads(item)
+
+                collect_threads(hidden_data)
+                for thread in all_threads[:limit]:
+                    posts.append(self._parse_thread(thread))
+
+            # 2. Intentar de GraphQL interceptado
+            if not posts and graphql_responses:
+                for gql_resp in graphql_responses:
+                    all_threads = []
+                    collect_threads(gql_resp)
+                    for thread in all_threads[:limit]:
+                        posts.append(self._parse_thread(thread))
+                    if posts:
+                        break
+
+            return posts
+
+        finally:
+            await page.close()
+
+    @staticmethod
+    def _normalize_timestamp(ts) -> Optional[int]:
+        """Normaliza cualquier formato de timestamp a Unix epoch (int).
+
+        Acepta:
+        - int/float (timestamp Unix)
+        - str ISO 8601 ("2025-01-15T10:30:00+00:00")
+        - str Unix timestamp ("1736933400")
+        - datetime object
+        """
+        if ts is None or ts == "":
+            return None
+
+        # Ya es timestamp numérico
+        if isinstance(ts, (int, float)):
+            # Si es > 1e12, probablemente es milisegundos
+            if ts > 1_000_000_000_000:
+                return int(ts / 1000)
+            return int(ts)
+
+        # datetime object
+        if hasattr(ts, 'timestamp'):
+            return int(ts.timestamp())
+
+        # String ISO o timestamp string
+        if isinstance(ts, str):
+            ts = ts.strip()
+            # Intentar como timestamp numérico string
+            if ts.replace(".", "").replace("-", "").isdigit() and len(ts) >= 10:
+                try:
+                    val = float(ts)
+                    if val > 1_000_000_000_000:
+                        return int(val / 1000)
+                    return int(val)
+                except ValueError:
+                    pass
+
+            # ISO 8601
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                return int(dt.timestamp())
+            except (ValueError, TypeError):
+                pass
 
         return None
 
-    def _fallback_extract(self, handle: str) -> Optional[dict]:
-        """
-        Fallback: extrae datos de la página HTML directamente.
-        Busca en meta tags, texto visible, y datos JSON-LD.
-        """
-        url = f"{self.BASE_URL}/@{handle}"
-        try:
-            resp = self.client.get(url)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Fallback fetch failed for @{handle}: {e}")
-            return None
+    def _parse_thread(self, thread: dict) -> dict:
+        """Parsea un thread/post individual en formato estandarizado."""
+        taken_at = self._normalize_timestamp(
+            thread.get("taken_at", thread.get("timestamp", None))
+        )
+        return {
+            "post_id": str(thread.get("id", thread.get("pk", ""))),
+            "text": thread.get("text", thread.get("caption", thread.get("caption_text", ""))),
+            "likes": int(thread.get("like_count", thread.get("likes", 0))),
+            "replies": int(thread.get("reply_count", thread.get("replies", 0))),
+            "reposts": int(thread.get("repost_count", thread.get("reposts", 0))),
+            "views": int(thread.get("view_count", thread.get("views", 0))),
+            "has_image": bool(
+                thread.get("image_urls") or thread.get("carousel_media") or
+                thread.get("media_urls") or thread.get("has_image")
+            ),
+            "has_video": bool(
+                thread.get("video_url") or thread.get("has_video")
+            ),
+            "taken_at": taken_at,
+            "permalink": thread.get("permalink", ""),
+            "source": "playwright",
+        }
 
-        soup = BeautifulSoup(resp.text, "lxml")
-        text = soup.get_text()
+    # ══════════════════════════════════════════════════════════
+    # ESTRATEGIA 3: oEmbed API
+    # ══════════════════════════════════════════════════════════
 
-        data = {
+    async def _oembed_extract(self, handle: str) -> Optional[dict]:
+        """
+        Usa la API oEmbed de Threads (tokenless).
+        No requiere autenticación y es muy estable.
+
+        Endpoint:
+        GET https://threads.net/api/oembed?url=https://threads.net/@{handle}
+        """
+        oembed_url = f"{self.OEMBED_URL}"
+        params = {
+            "url": f"{self.BASE_URL}/@{handle}",
+            "format": "json",
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(oembed_url, params=params, timeout=15)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+
+        # oEmbed devuelve: author_name, author_url, title, thumbnail_url, etc.
+        # No devuelve seguidores directamente, pero podemos extraer info básica
+        return {
             "handle": f"@{handle}",
-            "name": "",
-            "bio": "",
-            "followers": 0,
-            "following": 0,
+            "name": data.get("author_name", "").replace(f"(@{handle})", "").replace(f"(@{handle.lower()})", "").strip(" |") or f"@{handle}",
+            "bio": data.get("title", ""),
+            "followers": 0,  # oEmbed no da seguidores
             "posts": 0,
-            "source": "fallback_html",
+            "profile_pic": data.get("thumbnail_url", ""),
+            "source": "oembed",
             "scraped_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Meta tags OG
-        og_title = soup.find("meta", property="og:title")
-        if og_title:
-            data["name"] = og_title.get("content", "")
+    # ══════════════════════════════════════════════════════════
+    # ESTRATEGIA 4: GraphQL Directo (httpx)
+    # ══════════════════════════════════════════════════════════
 
-        og_desc = soup.find("meta", property="og:description")
-        if og_desc:
-            data["bio"] = og_desc.get("content", "")
+    def _resolve_user_id(self, handle: str) -> Optional[str]:
+        """Obtiene userID desde la página HTML del perfil."""
+        client = self._get_client()
+        url = f"{self.BASE_URL}/@{handle}"
+        _jitter_delay()
 
-        # Buscar seguidores en el texto visible
-        patterns = [
-            r'([\d,.KMkB]+)\s*(?:follower|seguidor)',
-            r'([\d,.KMkB]+)\s*seguidores',
-            r'([\d,.KMkB]+)\s*followers?',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                count = self._parse_count(match.group(1))
-                if count > 0:
-                    data["followers"] = count
-                    break
-
-        # Buscar posts count
-        post_patterns = [
-            r'([\d,.KMkB]+)\s*(?:posts?|publicacion)',
-            r'([\d,.KMkB]+)\s*publicaciones',
-        ]
-        for pattern in post_patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                data["posts"] = self._parse_count(match.group(1))
-                break
-
-        # Buscar JSON-LD
-        for script in soup.find_all("script", type="application/ld+json"):
+        for attempt in range(MAX_RETRIES):
             try:
-                ld = json.loads(script.string)
-                if isinstance(ld, dict):
-                    if ld.get("name"):
-                        data["name"] = ld.get("name", data["name"])
-                    if ld.get("description"):
-                        data["bio"] = ld.get("description", data["bio"])
-            except (json.JSONDecodeError, AttributeError):
-                continue
+                self._rotate_ua()
+                resp = client.get(url)
+                resp.raise_for_status()
+                html = resp.text
 
-        return data
+                # Buscar en scripts
+                patterns = [
+                    r'"userID"\s*:\s*"(\d+)"',
+                    r'"pk"\s*:\s*(\d+)',
+                    r'"id"\s*:\s*"(\d{10,})"',
+                ]
 
-    @staticmethod
-    def _parse_count(text) -> int:
-        """Parsea strings como '1.2M', '500K', '1,234' a enteros."""
-        if not text:
-            return 0
-        if isinstance(text, (int, float)):
-            return int(text)
+                for pattern in patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        return match.group(1)
 
-        text = str(text).strip().upper().replace(",", "")
+                # Buscar en script tags
+                soup = BeautifulSoup(html, "lxml")
+                for script in soup.find_all("script"):
+                    if not script.string:
+                        continue
+                    for pattern in patterns:
+                        match = re.search(pattern, script.string)
+                        if match:
+                            return match.group(1)
 
-        multipliers = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
-        for suffix, multiplier in multipliers.items():
-            if text.endswith(suffix):
+                if attempt < MAX_RETRIES - 1:
+                    backoff = _exponential_backoff(attempt)
+                    logger.debug(f"Retry {attempt+1} para userID @{handle} en {backoff:.1f}s")
+                    time.sleep(backoff)
+
+            except Exception as e:
+                logger.debug(f"Error resolviendo userID @{handle} (attempt {attempt+1}): {e}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(_exponential_backoff(attempt))
+
+        return None
+
+    def _fetch_via_graphql(self, user_id: str, handle: str) -> Optional[dict]:
+        """Consulta el endpoint GraphQL interno de Threads."""
+        for doc_id in self.PROFILE_DOC_IDS:
+            for attempt in range(MAX_RETRIES):
                 try:
-                    return int(float(text.rstrip(suffix)) * multiplier)
-                except ValueError:
-                    return 0
+                    self._rotate_ua()
+                    _jitter_delay()
 
-        try:
-            return int(float(text))
-        except ValueError:
-            return 0
+                    variables = json.dumps({"userID": user_id})
+                    payload = {"doc_id": doc_id, "variables": variables}
+
+                    client = self._get_client()
+                    resp = client.post(
+                        self.GRAPHQL_URL,
+                        data=payload,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    )
+
+                    if resp.status_code != 200:
+                        if attempt < MAX_RETRIES - 1:
+                            time.sleep(_exponential_backoff(attempt))
+                        continue
+
+                    result = resp.json()
+                    profile = _deep_find(result, {"follower_count", "username", "pk"})
+                    if profile:
+                        return {
+                            "handle": f"@{handle}",
+                            "name": profile.get("full_name", ""),
+                            "bio": profile.get("biography", ""),
+                            "followers": int(profile.get("follower_count", 0)),
+                            "following": int(profile.get("following_count", 0)),
+                            "posts": int(profile.get("threads_count", profile.get("media_count", 0))),
+                            "profile_pic": profile.get("profile_pic_url", ""),
+                            "user_id": str(profile.get("pk", "")),
+                            "source": "graphql_direct",
+                            "scraped_at": datetime.now(timezone.utc).isoformat(),
+                        }
+
+                except Exception as e:
+                    logger.debug(f"GraphQL error (doc_id={doc_id}, attempt={attempt+1}): {e}")
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(_exponential_backoff(attempt))
+
+        return None
+
+    def _fetch_posts_via_graphql(self, user_id: str, handle: str, limit: int = 10) -> list[dict]:
+        """Obtiene posts via GraphQL directo."""
+        for attempt in range(MAX_RETRIES):
+            try:
+                self._rotate_ua()
+                _jitter_delay()
+
+                variables = json.dumps({"userID": user_id})
+                payload = {"doc_id": self.POSTS_DOC_ID, "variables": variables}
+
+                client = self._get_client()
+                resp = client.post(
+                    self.GRAPHQL_URL,
+                    data=payload,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+
+                if resp.status_code != 200:
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(_exponential_backoff(attempt))
+                    continue
+
+                result = resp.json()
+
+                # Extraer threads de la respuesta
+                all_threads = []
+                def collect(obj):
+                    if isinstance(obj, dict):
+                        if obj.get("thread_items") and isinstance(obj["thread_items"], list):
+                            for ti in obj["thread_items"]:
+                                if isinstance(ti, dict) and "post" in ti:
+                                    all_threads.append(ti["post"])
+                        if obj.get("threads") and isinstance(obj["threads"], list):
+                            all_threads.extend(obj["threads"])
+                        for v in obj.values():
+                            collect(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            collect(item)
+
+                collect(result)
+                return [self._parse_thread(t) for t in all_threads[:limit]]
+
+            except Exception as e:
+                logger.debug(f"Posts GraphQL error (attempt {attempt+1}): {e}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(_exponential_backoff(attempt))
+
+        return []
+
+    # ══════════════════════════════════════════════════════════
+    # ESTRATEGIA 5: Static HTML Fallback
+    # ══════════════════════════════════════════════════════════
+
+    def _fallback_extract(self, handle: str) -> Optional[dict]:
+        """Último recurso: extrae datos del HTML estático."""
+        client = self._get_client()
+        url = f"{self.BASE_URL}/@{handle}"
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                self._rotate_ua()
+                _jitter_delay()
+                resp = client.get(url)
+                resp.raise_for_status()
+
+                soup = BeautifulSoup(resp.text, "lxml")
+                text = soup.get_text()
+
+                data = {
+                    "handle": f"@{handle}",
+                    "name": "",
+                    "bio": "",
+                    "followers": 0,
+                    "following": 0,
+                    "posts": 0,
+                    "source": "fallback_html",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+                # Intentar hidden JSON primero
+                hidden = _extract_from_hidden_json(resp.text)
+                if hidden:
+                    profile = _deep_find(hidden, {"follower_count", "pk"})
+                    if profile:
+                        data["followers"] = int(profile.get("follower_count", 0))
+                        data["name"] = profile.get("full_name", profile.get("name", ""))
+                        data["bio"] = profile.get("biography", "")
+                        data["posts"] = int(profile.get("threads_count", 0))
+                        data["profile_pic"] = profile.get("profile_pic_url", "")
+                        data["source"] = "fallback_hidden_json"
+                        return data
+
+                # Meta tags
+                og_title = soup.find("meta", property="og:title")
+                if og_title:
+                    data["name"] = og_title.get("content", "")
+
+                og_desc = soup.find("meta", property="og:description")
+                if og_desc:
+                    data["bio"] = og_desc.get("content", "")
+
+                # Patrones de seguidores
+                for pattern in [
+                    r'(\d[\d,.]*[KMBkmb]?)\s*(?:seguidores|follower|followers)',
+                    r'(?:seguidores|follower|followers)\s*(\d[\d,.]*[KMBkmb]?)',
+                ]:
+                    match = re.search(pattern, text, re.IGNORECASE)
+                    if match:
+                        count = _parse_count(match.group(1))
+                        if count > 0:
+                            data["followers"] = count
+                            break
+
+                # Patrones de posts
+                for pattern in [
+                    r'(\d[\d,.]*)\s*(?:publicaciones|posts|threads)',
+                ]:
+                    match = re.search(pattern, text, re.IGNORECASE)
+                    if match:
+                        data["posts"] = _parse_count(match.group(1))
+                        break
+
+                if data["followers"] > 0:
+                    return data
+
+            except Exception as e:
+                logger.debug(f"HTML fallback error (attempt {attempt+1}): {e}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(_exponential_backoff(attempt))
+
+        return None
 
     def close(self):
-        self.client.close()
+        """Limpia recursos del scraper."""
+        if self._httpx_client:
+            try:
+                self._httpx_client.close()
+            except Exception:
+                pass
+            self._httpx_client = None
 
 
-# ─── Conveniencia ───────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# API Pública (async)
+# ══════════════════════════════════════════════════════════════
 
 async def scrape_threads_profile(handle: str) -> Optional[dict]:
-    """
-    Scrapea un perfil de Threads. Ejecuta en thread pool para no bloquear.
-    """
-    loop = asyncio.get_event_loop()
-    scraper = ThreadsScraper()
+    """Scrapea perfil de Threads usando el scraper premium."""
+    scraper = ThreadsScraperPremium()
     try:
-        result = await loop.run_in_executor(None, scraper.scrape_profile, handle)
-        return result
+        return await scraper.scrape_profile(handle)
     finally:
         scraper.close()
 
 
 async def scrape_threads_posts(handle: str, limit: int = 10) -> list[dict]:
-    """
-    Scrapea posts recientes de un perfil de Threads (experimental).
-    """
-    loop = asyncio.get_event_loop()
-    scraper = ThreadsScraper()
+    """Scrapea posts recientes de Threads usando el scraper premium."""
+    clean_handle = handle.lstrip("@")
+    scraper = ThreadsScraperPremium()
+
     try:
-        clean_handle = handle.lstrip("@")
-        user_id = await loop.run_in_executor(None, scraper._resolve_user_id, clean_handle)
-        if not user_id:
-            return []
-
-        # Doc ID para posts del perfil
-        POSTS_DOC_ID = "6232751443445612"
-        variables = json.dumps({"userID": user_id})
-
-        def fetch_posts():
-            payload = {"doc_id": POSTS_DOC_ID, "variables": variables}
+        # Intentar Meta API primero
+        if META_ACCESS_TOKEN:
             try:
-                resp = scraper.client.post(
-                    scraper.GRAPHQL_URL,
-                    data=payload,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                )
-                if resp.status_code == 200:
-                    return resp.json()
+                posts = await scraper._meta_graph_api_posts(clean_handle, limit)
+                if posts:
+                    return posts
             except Exception:
                 pass
-            return None
 
-        result = await loop.run_in_executor(None, fetch_posts)
-        if not result:
-            return []
+        # Playwright headless
+        try:
+            posts = await scraper._playwright_extract_posts(clean_handle, limit)
+            if posts:
+                return posts
+        except Exception:
+            pass
 
-        posts = []
-        # Navegar estructura para encontrar threads
-        def find_threads(obj, collected):
-            if isinstance(obj, dict):
-                if obj.get("threads") and isinstance(obj["threads"], list):
-                    collected.extend(obj["threads"])
-                for v in obj.values():
-                    if isinstance(v, (dict, list)):
-                        find_threads(v, collected)
-            elif isinstance(obj, list):
-                for item in obj:
-                    find_threads(item, collected)
+        # GraphQL directo
+        user_id = await asyncio.get_event_loop().run_in_executor(
+            None, scraper._resolve_user_id, clean_handle
+        )
+        if user_id:
+            posts = await asyncio.get_event_loop().run_in_executor(
+                None, scraper._fetch_posts_via_graphql, user_id, clean_handle, limit
+            )
+            return posts
 
-        all_threads = []
-        find_threads(result, all_threads)
-
-        for thread in all_threads[:limit]:
-            thread_data = thread if isinstance(thread, dict) else {}
-            posts.append({
-                "post_id": str(thread_data.get("id", "")),
-                "text": thread_data.get("text", thread_data.get("caption", "")),
-                "likes": thread_data.get("like_count", thread_data.get("likes", 0)),
-                "replies": thread_data.get("reply_count", thread_data.get("replies", 0)),
-                "reposts": thread_data.get("repost_count", thread_data.get("reposts", 0)),
-                "has_image": bool(thread_data.get("image_urls") or thread_data.get("has_image")),
-                "has_video": bool(thread_data.get("video_url") or thread_data.get("has_video")),
-                "taken_at": thread_data.get("taken_at", None),
-            })
-
-        return posts
+        return []
     finally:
         scraper.close()

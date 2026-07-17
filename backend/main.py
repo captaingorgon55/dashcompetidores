@@ -23,11 +23,18 @@ from backend.database import (
     Competitor, ThreadsSnapshot, ThreadsPost,
     SearchConsoleDaily, DiscoverDaily, TrafficDaily, ManualEntry,
 )
-from backend.scrapers.threads import scrape_threads_profile, scrape_threads_posts
+from backend.scrapers.threads import (
+    scrape_threads_profile, scrape_threads_posts,
+    ThreadsScraperPremium,
+)
 from backend.auth import router as auth_router, get_google_credentials
 from backend.analysis.engine import AnalysisEngine
 from backend.scheduler import init_scheduler as init_bg_scheduler
-from backend.config import DEFAULT_COMPETITORS, FRONTEND_DIR
+from backend.config import (
+    DEFAULT_COMPETITORS, FRONTEND_DIR,
+    META_ACCESS_TOKEN, USER_AGENTS, PROXY_URL,
+    MIN_DELAY_BETWEEN_REQUESTS, MAX_RETRIES,
+)
 
 
 logging.basicConfig(
@@ -81,7 +88,11 @@ async def health_check():
         "version": "2.0.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "features": {
-            "threads_scraper": True,
+            "threads_scraper_v3_premium": True,
+            "playwright_headless": True,
+            "hidden_json_extraction": True,
+            "network_intercept": True,
+            "meta_api_ready": bool(META_ACCESS_TOKEN),
             "analysis_engine": True,
             "google_oauth": True,
             "auto_scheduler": True,
@@ -280,7 +291,7 @@ async def scrape_competitor_threads(
         following=data.get("following", 0),
         posts_count=data.get("posts", 0),
         engagement_rate=engagement_rate,
-        snapshot_date=datetime.utcnow(),
+        snapshot_date=datetime.now(timezone.utc),
         raw_data=data,
     )
     db.add(snapshot)
@@ -300,7 +311,7 @@ async def scrape_competitor_threads(
                     reposts=p.get("reposts", 0),
                     has_image=p.get("has_image", False),
                     has_video=p.get("has_video", False),
-                    posted_at=datetime.utcfromtimestamp(p["taken_at"])
+                    posted_at=datetime.fromtimestamp(p["taken_at"], tz=timezone.utc)
                     if p.get("taken_at") else None,
                 )
                 db.add(post)
@@ -338,7 +349,7 @@ async def scrape_all_threads(
                     followers=data.get("followers", 0),
                     following=data.get("following", 0),
                     posts_count=data.get("posts", 0),
-                    snapshot_date=datetime.utcnow(),
+                    snapshot_date=datetime.now(timezone.utc),
                     raw_data=data,
                 )
                 db.add(snapshot)
@@ -371,7 +382,7 @@ async def get_threads_snapshots(
     db: AsyncSession = Depends(get_session),
 ):
     """Historical Threads snapshots."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
         select(ThreadsSnapshot)
         .where(ThreadsSnapshot.competitor_id == competitor_id)
@@ -421,7 +432,7 @@ async def get_all_latest_threads(db: AsyncSession = Depends(get_session)):
                 "engagement_rate": latest.engagement_rate if latest else 0,
                 "snapshot_date": latest.snapshot_date.isoformat() if latest else None,
                 "needs_update": not latest or (
-                    datetime.utcnow() - latest.snapshot_date
+                    datetime.now(timezone.utc) - latest.snapshot_date
                 ).total_seconds() > 3600,
             } if latest else None,
         })
@@ -469,7 +480,7 @@ async def get_discover_data(
     db: AsyncSession = Depends(get_session),
 ):
     """Get Google Discover performance data."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
         select(DiscoverDaily)
         .where(DiscoverDaily.competitor_id == competitor_id)
@@ -495,7 +506,7 @@ async def get_search_data(
     db: AsyncSession = Depends(get_session),
 ):
     """Get Google Search performance data."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
         select(SearchConsoleDaily)
         .where(SearchConsoleDaily.competitor_id == competitor_id)
@@ -530,7 +541,7 @@ async def create_manual_entry(
         raise HTTPException(404, "Competitor not found")
 
     try:
-        entry_date = datetime.strptime(entry.entry_date, "%Y-%m-%d")
+        entry_date = datetime.strptime(entry.entry_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError:
         raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD")
 
@@ -557,7 +568,7 @@ async def get_manual_entries(
     db: AsyncSession = Depends(get_session),
 ):
     """Get manual entries with optional filters."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     query = select(ManualEntry).where(ManualEntry.entry_date >= cutoff)
 
     if competitor_id:
@@ -745,7 +756,7 @@ async def dashboard_summary(db: AsyncSession = Depends(get_session)):
             follower_growth = ((ts.followers - ts_prev.followers) / ts_prev.followers) * 100
 
         # Latest 7 days traffic
-        week_ago = datetime.utcnow() - timedelta(days=7)
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
         traffic_result = await db.execute(
             select(func.sum(TrafficDaily.sessions))
             .where(TrafficDaily.competitor_id == comp.id)
@@ -784,6 +795,67 @@ async def dashboard_summary(db: AsyncSession = Depends(get_session)):
         })
 
     return {"competitors": summary}
+
+
+# ══════════════════════════════════════════════════════════════
+# API Routes — Scraper v3 Premium Status
+# ══════════════════════════════════════════════════════════════
+
+@app.get("/api/threads/scraper-status")
+async def scraper_status():
+    """
+    Muestra qué estrategias de scraping están disponibles y su orden de prioridad.
+    """
+    return {
+        "version": "ThreadsScraperPremium v3.0",
+        "strategies": [
+            {
+                "name": "1. Meta Graph API (Oficial)",
+                "available": bool(META_ACCESS_TOKEN),
+                "description": "API oficial de Meta, requiere app aprobada con threads_profile_discovery",
+                "endpoints": ["GET /profile_lookup", "GET /profile_posts"],
+                "rate_limit": "1,000 req/24h",
+            },
+            {
+                "name": "2. Playwright Headless (Recomendado)",
+                "available": True,
+                "description": "Navegador real que ejecuta JS, captura GraphQL via network intercept + hidden JSON",
+                "features": [
+                    "Network interception (GraphQL en vivo)",
+                    "Hidden JSON (<script data-sjs>)",
+                    "Anti-detection (webdriver spoof, UA rotación)",
+                    "Auto-scroll para carga de posts",
+                ],
+            },
+            {
+                "name": "3. oEmbed API (Tokenless)",
+                "available": True,
+                "description": "API pública sin autenticación, solo datos básicos embed",
+                "endpoints": ["GET /api/oembed"],
+            },
+            {
+                "name": "4. GraphQL Directo (httpx)",
+                "available": True,
+                "description": "Peticiones directas al endpoint GraphQL con Doc IDs conocidos",
+                "features": [
+                    "Rotación de User-Agents",
+                    "Exponential backoff + jitter",
+                    f"Múltiples Doc IDs de fallback ({len(ThreadsScraperPremium.PROFILE_DOC_IDS)})",
+                ],
+            },
+            {
+                "name": "5. Static HTML Fallback",
+                "available": True,
+                "description": "Extracción de HTML estático con BeautifulSoup + meta tags + JSON-LD",
+            },
+        ],
+        "config": {
+            "user_agents": len(USER_AGENTS),
+            "min_delay": MIN_DELAY_BETWEEN_REQUESTS,
+            "max_retries": MAX_RETRIES,
+            "proxy_configured": bool(PROXY_URL),
+        },
+    }
 
 
 # ─── Run ────────────────────────────────────────────────────────

@@ -78,8 +78,30 @@ DEFAULT_COMPETITORS = {
 
 # ─── Threads Scraping ────────────────────────────────────────────
 THREADS_SCRAPE_INTERVAL_MINUTES = int(os.getenv("THREADS_SCRAPE_INTERVAL_MINUTES", "60"))
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
-)
+
+# Múltiples User-Agents para rotación (evitar detección)
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+]
+USER_AGENT = USER_AGENTS[0]  # Default
+
+# Playwright settings
+PLAYWRIGHT_HEADLESS = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+PLAYWRIGHT_TIMEOUT_MS = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "30000"))
+
+# Scraping rate limits
+MIN_DELAY_BETWEEN_REQUESTS = float(os.getenv("MIN_DELAY_BETWEEN_REQUESTS", "2.0"))  # seconds
+MAX_DELAY_BETWEEN_REQUESTS = float(os.getenv("MAX_DELAY_BETWEEN_REQUESTS", "5.0"))  # seconds
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+
+# Proxy (opcional)
+PROXY_URL = os.getenv("PROXY_URL", "")
+
+# Meta API (opcional - requiere aprobación de Meta)
+META_APP_ID = os.getenv("META_APP_ID", "")
+META_APP_SECRET = os.getenv("META_APP_SECRET", "")
+META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")

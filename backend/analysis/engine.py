@@ -191,7 +191,7 @@ class AnalysisEngine:
             ca.threads["posts_count"] = latest.posts_count
             ca.threads["avg_engagement_rate"] = latest.engagement_rate
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             # 7 días atrás
             snap_7d = [s for s in snapshots

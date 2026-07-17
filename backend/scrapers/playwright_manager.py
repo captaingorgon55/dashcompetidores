@@ -113,13 +113,91 @@ class PlaywrightManager:
             },
         )
 
-        # Inyectar script para ocultar automatización
+        # Inyectar script anti-detección avanzado
+        # Basado en técnicas stealth para evitar fingerprinting de Meta/Threads
         await context.add_init_script("""
+            // ─── Ocultar automatización ───
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['es-CO', 'es', 'en'] });
-            // Chrome runtime
-            window.chrome = { runtime: {} };
+            window.navigator.chrome = {
+                runtime: {},
+                loadTimes: function() {
+                    return {
+                        requestTime: Date.now() / 1000,
+                        startLoadTime: Date.now() / 1000,
+                        commitLoadTime: (Date.now() + 50) / 1000,
+                        finishDocumentLoadTime: (Date.now() + 100) / 1000,
+                        finishLoadTime: (Date.now() + 200) / 1000,
+                        firstPaintTime: (Date.now() + 50) / 1000,
+                        firstPaintAfterLoadTime: 0,
+                        navigationType: 'other',
+                        wasFetchedViaSpdy: true,
+                        wasNpnNegotiated: false,
+                        npnNegotiatedProtocol: 'h2',
+                        wasAlternateProtocolAvailable: false,
+                        connectionInfo: 'http/2',
+                    };
+                },
+                csi: function() {
+                    return {
+                        startE: Date.now(),
+                        onloadT: Date.now() + 200,
+                        pageT: 'about:blank',
+                        tran: Math.floor(Math.random() * 100),
+                    };
+                },
+            };
+
+            // ─── Plugins realistas ───
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [
+                    { name: 'Chrome PDF Plugin', description: 'Portable Document Format', filename: 'internal-pdf-viewer' },
+                    { name: 'Chrome PDF Viewer', description: '', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                    { name: 'Native Client', description: '', filename: 'internal-nacl-plugin' },
+                ]
+            });
+
+            // ─── Lenguajes y localización ───
+            Object.defineProperty(navigator, 'languages', { get: () => ['es-CO', 'es', 'en-US', 'en'] });
+            Object.defineProperty(navigator, 'language', { get: () => 'es-CO' });
+
+            // ─── Hardware realista (evitar fingerprinting) ───
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+            // ─── Canvas fingerprinting (ruido mínimo) ───
+            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(type) {
+                const result = originalToDataURL.call(this, type);
+                return result;
+            };
+
+            // ─── WebGL fingerprinting (spoof renderer) ───
+            try {
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
+                WebGLRenderingContext.prototype.getParameter = function(param) {
+                    // Spoof UNMASKED_VENDOR/RENDERER_WEBGL
+                    if (param === 37445) return 'Intel Inc.';
+                    if (param === 37446) return 'Intel Iris OpenGL Engine';
+                    return getParameter.call(this, param);
+                };
+            } catch(e) {}
+
+            // ─── Permissions API ───
+            try {
+                if (navigator.permissions) {
+                    const originalQuery = navigator.permissions.query.bind(navigator.permissions);
+                    navigator.permissions.query = (params) => {
+                        if (params.name === 'notifications') {
+                            return Promise.resolve({ state: 'prompt' });
+                        }
+                        return originalQuery(params);
+                    };
+                }
+            } catch(e) {}
+
+            // ─── Screen realista ───
+            Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+            Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
         """)
 
         self._contexts[profile] = context

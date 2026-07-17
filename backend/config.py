@@ -37,7 +37,7 @@ DEFAULT_COMPETITORS = {
     "elespectador": {
         "name": "El Espectador",
         "threads_handle": "@elespectador",
-        "threads_url": "https://www.threads.net/@elespectador",
+        "threads_url": "https://www.threads.com/@elespectador",
         "site_url": "https://www.elespectador.com",
         "color": "#1E3A5F",
         "is_us": True,
@@ -45,7 +45,7 @@ DEFAULT_COMPETITORS = {
     "revistavea": {
         "name": "Revista VEA",
         "threads_handle": "@larevistavea",
-        "threads_url": "https://www.threads.net/@larevistavea",
+        "threads_url": "https://www.threads.com/@larevistavea",
         "site_url": "https://www.elespectador.com/revista-vea/",
         "color": "#E91E63",
         "is_us": True,
@@ -53,7 +53,7 @@ DEFAULT_COMPETITORS = {
     "globo_g1": {
         "name": "G1 (Globo)",
         "threads_handle": "@g1",
-        "threads_url": "https://www.threads.net/@g1",
+        "threads_url": "https://www.threads.com/@g1",
         "site_url": "https://g1.globo.com",
         "color": "#FF6F00",
         "is_us": False,
@@ -61,7 +61,7 @@ DEFAULT_COMPETITORS = {
     "lanacion": {
         "name": "La Nación",
         "threads_handle": "@lanacion",
-        "threads_url": "https://www.threads.net/@lanacion",
+        "threads_url": "https://www.threads.com/@lanacion",
         "site_url": "https://www.lanacion.com.ar",
         "color": "#00796B",
         "is_us": False,
@@ -69,7 +69,7 @@ DEFAULT_COMPETITORS = {
     "clarin": {
         "name": "Clarín",
         "threads_handle": "@clarin",
-        "threads_url": "https://www.threads.net/@clarin",
+        "threads_url": "https://www.threads.com/@clarin",
         "site_url": "https://www.clarin.com",
         "color": "#D32F2F",
         "is_us": False,

@@ -202,9 +202,9 @@ class ThreadsScraperPremium:
     - Proxy support
     """
 
-    BASE_URL = "https://www.threads.net"
-    GRAPHQL_URL = "https://www.threads.net/api/graphql"
-    OEMBED_URL = "https://threads.net/api/oembed"
+    BASE_URL = "https://www.threads.com"
+    GRAPHQL_URL = "https://www.threads.com/api/graphql"
+    OEMBED_URL = "https://threads.com/api/oembed"
     IG_APP_ID = "238260118697367"
     META_GRAPH_API = "https://graph.threads.net"
     META_API_VERSION = "v21.0"
@@ -254,6 +254,9 @@ class ThreadsScraperPremium:
         clean_handle = handle.lstrip("@")
         logger.info(f"🔍 Scrapeando perfil @{clean_handle}...")
 
+        # Flag: si Playwright detectó login wall, saltar estrategias httpx
+        login_detected = False
+
         # ─── Estrategia 1: Meta Graph API ─────────────────────
         if META_ACCESS_TOKEN:
             try:
@@ -270,19 +273,30 @@ class ThreadsScraperPremium:
             if data and data.get("followers", 0) > 0:
                 logger.info(f"✅ Playwright: @{clean_handle} — {data.get('followers', 0)} seguidores")
                 return data
+            if data is None:
+                # Si Playwright devolvió None pero no lanzó excepción,
+                # probablemente fue redirigido a login
+                login_detected = True
         except Exception as e:
             logger.debug(f"Playwright falló: {e}")
 
-        # ─── Estrategia 3: oEmbed API ─────────────────────────
-        try:
-            data = await self._oembed_extract(clean_handle)
-            if data:
-                logger.info(f"✅ oEmbed: @{clean_handle} — {data.get('followers', 0)} seguidores")
-                return data
-        except Exception as e:
-            logger.debug(f"oEmbed falló: {e}")
+        # ─── Estrategia 3: oEmbed (Playwright) ────────────────
+        if not login_detected:
+            try:
+                data = await self._oembed_extract(clean_handle)
+                if data:
+                    logger.info(f"✅ oEmbed: @{clean_handle}")
+                    return data
+            except Exception as e:
+                logger.debug(f"oEmbed falló: {e}")
 
-        # ─── Estrategia 4: GraphQL Directo (httpx) ────────────
+        # ─── Estrategias httpx (4 y 5) ────────────────────────
+        # threads.com bloquea httpx (redirect a login), saltar si ya detectamos login
+        if login_detected:
+            logger.warning(f"⛔ threads.com bloquea httpx para @{clean_handle} — saltando estrategias 4 y 5")
+            return None
+
+        # Estrategia 4: GraphQL Directo
         try:
             user_id = self._resolve_user_id(clean_handle)
             if user_id:
@@ -293,7 +307,7 @@ class ThreadsScraperPremium:
         except Exception as e:
             logger.debug(f"GraphQL falló: {e}")
 
-        # ─── Estrategia 5: Static HTML ────────────────────────
+        # Estrategia 5: Static HTML
         try:
             data = self._fallback_extract(clean_handle)
             if data and data.get("followers", 0) > 0:
@@ -424,6 +438,11 @@ class ThreadsScraperPremium:
                 timeout=PLAYWRIGHT_TIMEOUT_MS,
             )
 
+            # Detectar si nos redirigieron al login
+            if "/login" in page.url:
+                logger.warning(f"⛔ Redirigido a login para @{handle} (page.url={page.url})")
+                return None
+
             # Esperar un poco para que carguen los scripts dinámicos
             await _a_jitter_delay(2, 4)
 
@@ -550,8 +569,13 @@ class ThreadsScraperPremium:
             await page.goto(
                 profile_url,
                 wait_until="networkidle",
-                timeout=30000,
+                timeout=PLAYWRIGHT_TIMEOUT_MS,
             )
+
+            # Detectar si nos redirigieron al login
+            if "/login" in page.url:
+                logger.warning(f"⛔ Redirigido a login para posts de @{handle}")
+                return []
 
             await _a_jitter_delay(3, 5)
 
@@ -676,11 +700,12 @@ class ThreadsScraperPremium:
 
     async def _oembed_extract(self, handle: str) -> Optional[dict]:
         """
-        Usa la API oEmbed de Threads (tokenless).
-        No requiere autenticación y es muy estable.
+        Usa la API oEmbed de Threads (tokenless) via Playwright.
+        threads.com bloquea httpx (redirige a login), así que usamos
+        el navegador para obtener la respuesta JSON del oEmbed.
 
         Endpoint:
-        GET https://threads.net/api/oembed?url=https://threads.net/@{handle}
+        GET https://threads.com/api/oembed?url=https://threads.com/@{handle}
         """
         oembed_url = f"{self.OEMBED_URL}"
         params = {
@@ -688,24 +713,68 @@ class ThreadsScraperPremium:
             "format": "json",
         }
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(oembed_url, params=params, timeout=15)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
+        # Intentar con Playwright primero (threads.com bloquea httpx)
+        try:
+            context = await playwright_manager.get_context(f"oembed_{handle}")
+            page = await context.new_page()
+            try:
+                full_url = f"{oembed_url}?url={self.BASE_URL}/@{handle}&format=json"
+                resp = await page.goto(full_url, wait_until="networkidle", timeout=15000)
 
-        # oEmbed devuelve: author_name, author_url, title, thumbnail_url, etc.
-        # No devuelve seguidores directamente, pero podemos extraer info básica
-        return {
-            "handle": f"@{handle}",
-            "name": data.get("author_name", "").replace(f"(@{handle})", "").replace(f"(@{handle.lower()})", "").strip(" |") or f"@{handle}",
-            "bio": data.get("title", ""),
-            "followers": 0,  # oEmbed no da seguidores
-            "posts": 0,
-            "profile_pic": data.get("thumbnail_url", ""),
-            "source": "oembed",
-            "scraped_at": datetime.now(timezone.utc).isoformat(),
-        }
+                # Verificar si redirigió a login
+                if "/login/" in page.url:
+                    logger.debug(f"oEmbed redirigió a login para @{handle}")
+                    # Seguir con fallback httpx
+                    raise Exception("oEmbed login redirect")
+
+                # Verificar que no sea HTML (login page)
+                content_type = resp.headers.get("content-type", "").lower() if resp else ""
+                if resp and resp.ok and "text/html" not in content_type:
+                    body = await page.evaluate("() => document.body.innerText")
+                    data = json.loads(body)
+                    if data.get("author_name"):
+                        return {
+                            "handle": f"@{handle}",
+                            "name": data.get("author_name", "").replace(f"(@{handle})", "").strip(" |") or f"@{handle}",
+                            "bio": data.get("title", ""),
+                            "followers": 0,
+                            "posts": 0,
+                            "profile_pic": data.get("thumbnail_url", ""),
+                            "source": "oembed",
+                            "scraped_at": datetime.now(timezone.utc).isoformat(),
+                        }
+            except Exception:
+                pass
+            finally:
+                await page.close()
+        except Exception:
+            pass
+
+        # Fallback con httpx (por si threads.net aún funciona)
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.get(
+                    "https://threads.net/api/oembed",
+                    params={"url": f"https://www.threads.net/@{handle}", "format": "json"},
+                    timeout=10
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("author_name"):
+                        return {
+                            "handle": f"@{handle}",
+                            "name": data.get("author_name", "").replace(f"(@{handle})", "").strip(" |") or f"@{handle}",
+                            "bio": data.get("title", ""),
+                            "followers": 0,
+                            "posts": 0,
+                            "profile_pic": data.get("thumbnail_url", ""),
+                            "source": "oembed_legacy",
+                            "scraped_at": datetime.now(timezone.utc).isoformat(),
+                        }
+            except Exception:
+                pass
+
+        return None
 
     # ══════════════════════════════════════════════════════════
     # ESTRATEGIA 4: GraphQL Directo (httpx)
